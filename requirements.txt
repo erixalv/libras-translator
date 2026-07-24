@@ -1,0 +1,10 @@
+opencv-python==4.10.*
+mediapipe==0.10.*
+numpy
+pandas
+scikit-learn
+torch
+streamlit
+streamlit-webrtc
+matplotlib
+pytest
