@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# videos brutos e artefatos de build do dataset — regeneraveis, nao versionar
+data/raw/
+data/processed/
+videos UFPE (V-LIBRASIL)/
