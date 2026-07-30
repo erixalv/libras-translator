@@ -3,7 +3,8 @@ mediapipe==0.10.14    # >=0.10.21 remove a API mp.solutions (Holistic) usada em 
 numpy
 pandas
 scikit-learn
-torch                 # framework fechado (ver Seção 3.5 do CONTRATOS.md) — não usar tensorflow
+torch                 
 streamlit
 streamlit-webrtc      # captura de vídeo ao vivo no navegador (Pessoa 5)
 matplotlib
+pytest

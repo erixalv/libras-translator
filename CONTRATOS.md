@@ -1,4 +1,3 @@
-
 # CONTRATOS.md — Tradutor Automático de Libras → Português
 
 ### Documento de referência para o kickoff (Dia 1). Copiar para a raiz do repositório.
