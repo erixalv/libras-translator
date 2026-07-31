@@ -1,10 +1,10 @@
 opencv-python==4.10.*
-mediapipe==0.10.*
+mediapipe==0.10.14    # >=0.10.21 remove a API mp.solutions (Holistic) usada em extrator_mediapipe.py
 numpy
 pandas
 scikit-learn
-torch
+torch                 
 streamlit
-streamlit-webrtc
+streamlit-webrtc      # captura de vídeo ao vivo no navegador (Pessoa 5)
 matplotlib
 pytest
