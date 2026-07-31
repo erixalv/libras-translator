@@ -5,7 +5,7 @@ import torch.nn as nn
 class ClassificadorLSTM(nn.Module):
     def __init__(
         self,
-        n_features: int = 258,
+        n_features: int = 260,
         hidden_size: int = 128,
         n_layers: int = 2,
         dropout: float = 0.3,

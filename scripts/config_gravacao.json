@@ -1,0 +1,11 @@
+{
+  "pronomes": ["EU", "VOCE"],
+  "grupo_b": [
+    "QUER", "AJUDAR", "GOSTAR", "COMER", "IR", "SIM", "NAO", "OI",
+    "OBRIGADO", "POR_FAVOR", "AGUA", "CASA", "DORMIR", "VER", "AMIGO"
+  ],
+  "repeticoes": {
+    "treino": {"pronomes": 15, "grupo_b": 5},
+    "teste":  {"pronomes": 5,  "grupo_b": 3}
+  }
+}

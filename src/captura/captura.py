@@ -36,8 +36,8 @@ def capturar_frames(fonte: str | int = 0) -> Iterator[np.ndarray]:
             fps_atual = 1.0 / (curr_time - prev_time + 1e-6)
             prev_time = curr_time
             
-            if fps_atual < 15.0:
-                logger.warning(f"FPS baixo detectado: {fps_atual:.1f}. O ideal é > 15 FPS.")
+            #if fps_atual < 15.0:
+                #logger.warning(f"FPS baixo detectado: {fps_atual:.1f}. O ideal é > 15 FPS.")
             
             # Garante que o shape é exatamente 480x640, caso a câmera ignore a configuração
             if frame.shape[:2] != (480, 640):
