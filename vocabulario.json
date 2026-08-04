@@ -1,6 +1,6 @@
 {
-  "versao": 3,
-  "origem": "V-LIBRASIL (data/raw/VLIBRASIL) + MINDS-Libras (Kaggle j0aopsantos/minds-libras, 20 sinais, nomes sem acento conforme dataset original)",
+  "versao": 4,
+  "origem": "V-LIBRASIL (data/raw/VLIBRASIL) + MINDS-Libras (Kaggle j0aopsantos/minds-libras, 20 sinais, nomes sem acento conforme dataset original) + Gravação própria (pronomes Eu/Você, data/raw/GRAVACOES)",
   "sinais": [
     "Abacaxi",
     "Abanar",
@@ -535,6 +535,7 @@
     "Estudo",
     "Estúpido",
     "Etc",
+    "Eu",
     "Eu amo você",
     "Eu vejo",
     "Evitar",
@@ -1355,6 +1356,7 @@
     "Viver",
     "Voar de avião",
     "Vocabulário",
+    "Você",
     "Volta",
     "Volêi",
     "Vomitar",
@@ -2757,6 +2759,8 @@
     "Ódio": "V-LIBRASIL",
     "Óleo": "V-LIBRASIL",
     "Última": "V-LIBRASIL",
-    "Última semana": "V-LIBRASIL"
+    "Última semana": "V-LIBRASIL",
+    "Eu": "Gravação própria (data/raw/GRAVACOES)",
+    "Você": "Gravação própria (data/raw/GRAVACOES)"
   }
 }
