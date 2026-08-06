@@ -5,6 +5,6 @@ __pycache__/
 
 # videos brutos e artefatos de build do dataset — regeneraveis, nao versionar
 data/raw/
-data/processed/
+
 videos UFPE (V-LIBRASIL)/
 data/raw_gravacoes/

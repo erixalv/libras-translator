@@ -1,3 +1,9 @@
+"""
+Classificador LSTM bidirecional para landmarks de mao (LIBRAS)
+  - LSTM bidirecional, 2 camadas, hidden_size=128, dropout=0.3
+  - Dropout adicional antes da camada linear de saida (regularizacao extra)
+  - Linear(256, n_classes) na saida (256 = 128*2 por ser bidirecional)
+"""
 import torch
 import torch.nn as nn
 
@@ -9,6 +15,7 @@ class ClassificadorLSTM(nn.Module):
         hidden_size: int = 128,
         n_layers: int = 2,
         dropout: float = 0.3,
+        dropout_saida: float = 0.3,
         n_classes: int = 10,
     ):
         super().__init__()
@@ -20,13 +27,13 @@ class ClassificadorLSTM(nn.Module):
             bidirectional=True,
             dropout=dropout if n_layers > 1 else 0.0,
         )
+        self.dropout_saida = nn.Dropout(dropout_saida)
         self.classificador = nn.Linear(hidden_size * 2, n_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (batch, 30, n_features)
-        saida, (h_n, _) = self.lstm(x)
-        # h_n: (n_layers*2, batch, hidden_size) -- pega a ultima camada, ambas direcoes
-        ultima_fwd = h_n[-2]
-        ultima_bwd = h_n[-1]
-        representacao = torch.cat([ultima_fwd, ultima_bwd], dim=1)  # (batch, hidden*2)
-        return self.classificador(representacao)  # (batch, n_classes) -- logits
+        _, (h_n, _) = self.lstm(x)
+        ultima_fwd = h_n[-2]  # ultima camada, direcao forward
+        ultima_bwd = h_n[-1]  # ultima camada, direcao backward
+        representacao = torch.cat([ultima_fwd, ultima_bwd], dim=1)
+        representacao = self.dropout_saida(representacao)
+        return self.classificador(representacao)

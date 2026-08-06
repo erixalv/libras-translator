@@ -29,6 +29,13 @@ N_FEATURES = OFF_MASK + 2                # 260
 OMBRO_ESQ, OMBRO_DIR = 11, 12
 QUADRIL_ESQ, QUADRIL_DIR = 23, 24
 
+# Pares (esquerda, direita) dos 33 pontos de pose do MediaPipe -- usado pelo
+# espelhamento lateral. Indice 0 (nariz) fica de fora por nao ter par.
+PARES_POSE_ESQ_DIR = [
+    (1, 4), (2, 5), (3, 6), (7, 8), (9, 10), (11, 12), (13, 14), (15, 16),
+    (17, 18), (19, 20), (21, 22), (23, 24), (25, 26), (27, 28), (29, 30), (31, 32),
+]
+
 SENTINELA = -5.0   # fora de qualquer faixa plausivel apos normalizacao
 EPS = 1e-6
 
@@ -114,6 +121,51 @@ def registro_para_vetor(reg: dict) -> np.ndarray:
             continue
         v[off:off + N_MAO * 3] = np.asarray(mao, dtype=np.float32).reshape(-1)
         v[i_mask] = 1.0
+
+    return v
+
+
+def espelhar_vetor(v: np.ndarray) -> np.ndarray:
+    """
+    Espelha lateralmente um vetor de features (Contrato B, N_FEATURES):
+    inverte o eixo x, troca os pares esquerda/direita da pose e troca os
+    blocos de mao esquerda/direita (landmarks + mask).
+
+    Usado como data augmentation para tornar o modelo robusto a
+    sinalizadores destros/canhotos que usam a mao dominante oposta em sinais
+    de uma mao so -- e, de quebra, dobra a variedade efetiva de treino.
+
+    ATENCAO: assume que o sinal nao muda de significado quando espelhado
+    (valido pra maioria do vocabulario, mas nao necessariamente pra sinais
+    direcionais/espaciais especificos -- conferir o vocabulario antes de usar).
+
+    So flipa coordenadas x de blocos que estao de fato marcados como
+    detectados (mask == 1.0); blocos com SENTINELA sao deixados como estao,
+    senao a sentinela deixaria de ser um valor sentinela consistente.
+    """
+    v = v.copy()
+
+    mask_esq_ativa = v[OFF_MASK] == 1.0
+    mask_dir_ativa = v[OFF_MASK + 1] == 1.0
+
+    pose = v[OFF_POSE:OFF_MAO_ESQ].reshape(N_POSE, 4).copy()
+    pose[:, 0] = -pose[:, 0]
+    for esq, dir_ in PARES_POSE_ESQ_DIR:
+        pose[[esq, dir_]] = pose[[dir_, esq]]
+    v[OFF_POSE:OFF_MAO_ESQ] = pose.reshape(-1)
+
+    mao_esq = v[OFF_MAO_ESQ:OFF_MAO_DIR].reshape(N_MAO, 3).copy()
+    mao_dir = v[OFF_MAO_DIR:OFF_MASK].reshape(N_MAO, 3).copy()
+    if mask_esq_ativa:
+        mao_esq[:, 0] = -mao_esq[:, 0]
+    if mask_dir_ativa:
+        mao_dir[:, 0] = -mao_dir[:, 0]
+
+    # os blocos trocam de lugar (o que era mao esquerda vira mao direita)
+    v[OFF_MAO_ESQ:OFF_MAO_DIR] = mao_dir.reshape(-1)
+    v[OFF_MAO_DIR:OFF_MASK] = mao_esq.reshape(-1)
+    v[OFF_MASK] = 1.0 if mask_dir_ativa else 0.0
+    v[OFF_MASK + 1] = 1.0 if mask_esq_ativa else 0.0
 
     return v
 
