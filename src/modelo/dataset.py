@@ -9,8 +9,7 @@ from torch.utils.data import Dataset
 RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CAMINHO_VOCAB = os.path.join(RAIZ, "vocabulario.json")
 
-# TROCAR PELO DATASET REAL QUANDO FOR ENTREGUE
-CAMINHO_DADOS = os.path.join(RAIZ, "data", "mocks", "landmarks_exemplo.npz")
+CAMINHO_DADOS = os.path.join(RAIZ, "data", "processed", "dataset_final.npz")
 
 
 def carregar_vocabulario() -> list[str]:
@@ -18,32 +17,60 @@ def carregar_vocabulario() -> list[str]:
         return json.load(f)["sinais"]
 
 
-class LibrasLandmarksDataset(Dataset):
-    """
-    Espera um .npz com:
-      - 'sequencias': array (N, 30, N_FEATURES) float32
-      - 'rotulos':    array (N,) de strings, cada uma um item de vocabulario.json
+def carregar_npz(caminho: str = CAMINHO_DADOS) -> dict:
+    dados = np.load(caminho, allow_pickle=True)
 
-    O StandardScaler e ajustado apenas no conjunto de treino (fit=True) e
-    reaproveitado na validacao/inferencia (fit=False), conforme Secao 3.5
-    do CONTRATOS.md.
+    classes_ordem_original = dados["classes"].tolist()
+    vocabulario = carregar_vocabulario()
+
+    if sorted(classes_ordem_original) != sorted(vocabulario):
+        faltando_no_vocab = set(classes_ordem_original) - set(vocabulario)
+        faltando_no_dataset = set(vocabulario) - set(classes_ordem_original)
+        msg = "vocabulario.json e as 'classes' do .npz NAO BATEM.\n"
+        if faltando_no_vocab:
+            msg += f"  Existem no dataset mas nao no vocabulario.json: {faltando_no_vocab}\n"
+        if faltando_no_dataset:
+            msg += f"  Existem no vocabulario.json mas nao no dataset: {faltando_no_dataset}\n"
+        raise ValueError(msg)
+
+    return {
+        "X_train": dados["X_train"],
+        "y_train": dados["y_train"],
+        "X_test": dados["X_test"],
+        "y_test": dados["y_test"],
+        "classes": classes_ordem_original,  # ORDEM PRESERVADA -- e o mapa indice -> nome
+    }
+
+
+def _augmentar_sequencia(x: np.ndarray, ruido_std: float = 0.01, prob_mascara: float = 0.1) -> np.ndarray:
+    """Augmentation leve para sequencias de landmarks, aplicada so no treino:
+    - ruido gaussiano pequeno em cada coordenada (simula jitter de deteccao)
+    - mascaramento aleatorio de alguns frames, zerando-os (forca o modelo a
+      nao depender de um frame especifico da sequencia)
     """
+    x_aug = x.copy()
+    x_aug = x_aug + np.random.normal(0, ruido_std, size=x_aug.shape).astype(x_aug.dtype)
+
+    n_frames = x_aug.shape[0]
+    mascara = np.random.rand(n_frames) < prob_mascara
+    x_aug[mascara] = 0.0
+
+    return x_aug
+
+
+class LibrasLandmarksDataset(Dataset):
 
     def __init__(
         self,
-        sequencias: np.ndarray,
-        rotulos: np.ndarray,
-        vocabulario: list[str],
+        X: np.ndarray,
+        y: np.ndarray,
         scaler: StandardScaler | None = None,
         fit_scaler: bool = False,
+        augment: bool = False,
     ):
-        self.vocabulario = vocabulario
-        self.classe_para_indice = {c: i for i, c in enumerate(vocabulario)}
+        n, n_frames, n_features = X.shape
+        flat = X.reshape(-1, n_features)
 
-        n, n_frames, n_features = sequencias.shape
-        flat = sequencias.reshape(-1, n_features)
-
-        #transforma cada feature pra ter média 0 e desvio-padrão 1
         if fit_scaler:
             self.scaler = StandardScaler()
             flat = self.scaler.fit_transform(flat)
@@ -52,18 +79,17 @@ class LibrasLandmarksDataset(Dataset):
             self.scaler = scaler
             flat = self.scaler.transform(flat)
 
-        self.sequencias = flat.reshape(n, n_frames, n_features).astype(np.float32)
-        self.rotulos_indice = np.array([self.classe_para_indice[r] for r in rotulos])
+        self.X = flat.reshape(n, n_frames, n_features).astype(np.float32)
+        self.y = y.astype(np.int64)
+        self.augment = augment
 
     def __len__(self) -> int:
-        return len(self.sequencias)
+        return len(self.X)
 
     def __getitem__(self, idx: int):
-        x = torch.from_numpy(self.sequencias[idx])
-        y = torch.tensor(self.rotulos_indice[idx], dtype=torch.long)
+        x = self.X[idx]
+        if self.augment:
+            x = _augmentar_sequencia(x)
+        x = torch.from_numpy(x)
+        y = torch.tensor(self.y[idx], dtype=torch.long)
         return x, y
-
-
-def carregar_dados_brutos(caminho: str = CAMINHO_DADOS):
-    dados = np.load(caminho, allow_pickle=True)
-    return dados["sequencias"], dados["rotulos"]
