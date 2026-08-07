@@ -6,6 +6,8 @@ import torch
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import Dataset
 
+from src.landmarks.normalizacao import espelhar_vetor
+
 RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CAMINHO_VOCAB = os.path.join(RAIZ, "vocabulario.json")
 
@@ -36,10 +38,31 @@ def carregar_npz(caminho: str = CAMINHO_DADOS) -> dict:
     return {
         "X_train": dados["X_train"],
         "y_train": dados["y_train"],
+        "sinalizadores_train": dados.get("sinalizadores_train"),
         "X_test": dados["X_test"],
         "y_test": dados["y_test"],
+        "sinalizadores_test": dados.get("sinalizadores_test"),
         "classes": classes_ordem_original,  # ORDEM PRESERVADA -- e o mapa indice -> nome
     }
+
+
+def espelhar_sequencias(X: np.ndarray) -> np.ndarray:
+    """
+    Espelha lateralmente um lote de sequencias (N, T, N_FEATURES), frame a
+    frame, via espelhar_vetor (inverte eixo x, troca pares esq/dir da pose e
+    os blocos de mao).
+
+    Precisa ser chamado ANTES do StandardScaler: a inversao de x so tem
+    significado geometrico em coordenadas normalizadas cruas (centro dos
+    ombros), nao em z-score -- depois de escalado, negar o valor nao
+    corresponde mais a espelhar a coordenada original.
+    """
+    n, n_frames, n_features = X.shape
+    espelhado = np.empty_like(X)
+    for i in range(n):
+        for t in range(n_frames):
+            espelhado[i, t] = espelhar_vetor(X[i, t])
+    return espelhado
 
 
 def _augmentar_sequencia(x: np.ndarray, ruido_std: float = 0.01, prob_mascara: float = 0.1) -> np.ndarray:
