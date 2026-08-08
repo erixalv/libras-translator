@@ -3,8 +3,15 @@ __pycache__/
 *.pyc
 .DS_Store
 
-# videos brutos e artefatos de build do dataset — regeneraveis, nao versionar
+# videos brutos e cache de landmarks — regeneraveis, nao versionar
+# (data/processed/dataset_final.npz, modelo_melhor.pt e scaler.pkl SAO versionados)
 data/raw/
+data/processed/cache/
+data/processed/cache_minds/
 
 videos UFPE (V-LIBRASIL)/
+treino/
+treino */
+teste/
+teste */
 data/raw_gravacoes/
