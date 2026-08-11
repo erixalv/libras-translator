@@ -7,7 +7,7 @@ import numpy as np
 import torch
 
 from src.modelo.arquiteturas import ClassificadorLSTM
-from src.modelo.dataset import carregar_vocabulario
+from src.modelo.dataset import adicionar_features_velocidade, carregar_vocabulario
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DIR_PROCESSED = os.path.join(RAIZ, "data", "processed")
@@ -17,11 +17,12 @@ CAMINHO_SCALER = os.path.join(DIR_PROCESSED, "scaler.pkl")
 _vocabulario = carregar_vocabulario()
 _modelo = None
 _scaler = None
+_usar_velocidade = True
 _dispositivo = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def _carregar_modelo_real():
-    global _modelo, _scaler
+    global _modelo, _scaler, _usar_velocidade
     if _modelo is not None:
         return
     checkpoint = torch.load(CAMINHO_MODELO, map_location=_dispositivo)
@@ -29,7 +30,11 @@ def _carregar_modelo_real():
     # ordem do vocabulario.json -- e essa que bate com os indices do modelo
     global _vocabulario
     _vocabulario = checkpoint["vocabulario"]
-    _modelo = ClassificadorLSTM(n_features=checkpoint["n_features"], n_classes=len(checkpoint["vocabulario"]))
+    _usar_velocidade = checkpoint.get("usar_velocidade", False)
+    usar_atencao = checkpoint.get("usar_atencao", False)
+    _modelo = ClassificadorLSTM(
+        n_features=checkpoint["n_features"], n_classes=len(checkpoint["vocabulario"]), usar_atencao=usar_atencao
+    )
     _modelo.load_state_dict(checkpoint["state_dict"])
     _modelo.to(_dispositivo).eval()
     with open(CAMINHO_SCALER, "rb") as f:
@@ -65,7 +70,8 @@ def predict(sequencia: np.ndarray, top_k: int = 5) -> dict:
         }
 
     _carregar_modelo_real()
-    x = _scaler.transform(sequencia)
+    seq = adicionar_features_velocidade(sequencia) if _usar_velocidade else sequencia
+    x = _scaler.transform(seq)
     x = torch.from_numpy(x.astype(np.float32)).unsqueeze(0).to(_dispositivo)
 
     with torch.no_grad():

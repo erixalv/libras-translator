@@ -7,7 +7,7 @@ from sklearn.metrics import ConfusionMatrixDisplay, classification_report, confu
 from torch.utils.data import DataLoader
 
 from src.modelo.arquiteturas import ClassificadorLSTM
-from src.modelo.dataset import LibrasLandmarksDataset, carregar_npz
+from src.modelo.dataset import LibrasLandmarksDataset, adicionar_features_velocidade, carregar_npz
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DIR_PROCESSED = os.path.join(RAIZ, "data", "processed")
@@ -24,11 +24,17 @@ def avaliar() -> None:
     with open(os.path.join(DIR_PROCESSED, "scaler.pkl"), "rb") as f:
         scaler = pickle.load(f)
 
-    ds_teste = LibrasLandmarksDataset(dados["X_test"], dados["y_test"], scaler=scaler, fit_scaler=False)
+    checkpoint = torch.load(os.path.join(DIR_PROCESSED, "modelo_melhor.pt"), map_location=dispositivo)
+    usar_velocidade = checkpoint.get("usar_velocidade", False)
+    usar_atencao = checkpoint.get("usar_atencao", False)
+
+    X_test = adicionar_features_velocidade(dados["X_test"]) if usar_velocidade else dados["X_test"]
+    ds_teste = LibrasLandmarksDataset(X_test, dados["y_test"], scaler=scaler, fit_scaler=False)
     dl_teste = DataLoader(ds_teste, batch_size=16, shuffle=False)
 
-    checkpoint = torch.load(os.path.join(DIR_PROCESSED, "modelo_melhor.pt"), map_location=dispositivo)
-    modelo = ClassificadorLSTM(n_features=checkpoint["n_features"], n_classes=len(classes))
+    modelo = ClassificadorLSTM(
+        n_features=checkpoint["n_features"], n_classes=len(classes), usar_atencao=usar_atencao
+    )
     modelo.load_state_dict(checkpoint["state_dict"])
     modelo.to(dispositivo).eval()
 
