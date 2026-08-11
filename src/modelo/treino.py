@@ -6,17 +6,24 @@ treino/validacao e loteria: rodando o mesmo treino com o holdout de
 validacao trocado, a acc final variou de 11% a 47% (ver historico do
 projeto). Por isso o fluxo aqui e em duas etapas:
 
-  1. validar_cruzado(): GroupKFold por sinalizador (~3 de fora por fold).
-     Cada fold treina do zero e mede acc no holdout -- a media +- desvio
-     entre folds e a estimativa CONFIAVEL de generalizacao pra reportar.
-     Tambem devolve a mediana da "melhor epoca" entre os folds e (se
-     devolver_modelos=True) os 4 modelos treinados, pra ensemble.
-  2. treinar_epocas_fixas(): treino final de producao, com TODOS os 12
-     sinalizadores de treino (sem separar validacao -- pouca gente pra
-     desperdicar em early stopping), por esse numero fixo de epocas.
+  1. validar_cruzado(devolver_modelos=True): GroupKFold por sinalizador
+     (~3 de fora por fold). Cada fold treina do zero e mede acc no holdout
+     -- a media +- desvio entre folds e a estimativa CONFIAVEL de
+     generalizacao pra reportar. Os 4 modelos treinados (cada um viu um
+     recorte diferente de sinalizadores) sao mantidos em vez de
+     descartados.
+  2. salvar_ensemble(): esses 4 modelos + scalers SAO a producao -- em vez
+     de treinar um 5o modelo do zero com 100% do treino (como era antes,
+     ver historico do projeto), a predicao final usa a MEDIA do softmax
+     dos 4 (ver avaliar_ensemble()). Testado no holdout real: 48.4% de
+     acuracia com o ensemble vs 40.8% do modelo unico anterior, mesma
+     arquitetura -- ganho de graca, sem dado novo, so parar de jogar fora
+     os modelos que o CV ja treina. Elimina tambem a necessidade de
+     escolher um numero fixo de epocas via mediana do CV: cada modelo do
+     ensemble ja usa seu proprio checkpoint de early stopping.
 
 O conjunto de teste (X_test/y_test, holdout de sinalizador desconhecido,
-nunca usado no CV nem no treino final) e avaliado UMA UNICA VEZ, no fim.
+nunca usado no CV) e avaliado UMA UNICA VEZ, no fim, com avaliar_ensemble().
 
 Outros pontos:
   - augmentation com espelhamento lateral (robustez a mao dominante),
@@ -124,10 +131,9 @@ def _treinar_um_modelo(
     Treina 1 modelo do zero com early stopping em (X_val, y_val). Devolve
     (melhor_acc_val, melhor_epoca, modelo com os melhores pesos carregados, scaler).
 
-    Usado dentro do CV (pra medir generalizacao) -- o treino final de
-    producao NAO usa esta funcao, usa treinar_epocas_fixas (ver abaixo),
-    porque um unico split treino/validacao com so 12 sinalizadores se
-    mostrou instavel demais pra escolher o checkpoint final (ver historico).
+    Usada dentro do CV (pra medir generalizacao) -- os proprios modelos
+    treinados aqui, um por fold, viram a producao (ensemble, ver
+    salvar_ensemble() e avaliar_ensemble() em treinar()).
     """
     ds_treino, pesos_classe = _preparar_treino(X_train, y_train, n_classes, usar_velocidade)
     X_val_prep = adicionar_features_velocidade(X_val) if usar_velocidade else X_val
@@ -200,12 +206,12 @@ def validar_cruzado(
     treino/validacao -- com so 12 pessoas no dataset, uma unica divisao
     depende demais de sorte de quem caiu no holdout.
 
-    Devolve (epoca_final, modelos_e_scalers) -- epoca_final e a mediana da
-    "melhor epoca" entre os folds (usada como numero fixo de epocas pro
-    treino final com 100% do treino, ver treinar_epocas_fixas());
+    Devolve (epoca_final, modelos_e_scalers) -- epoca_final e so a mediana
+    da "melhor epoca" entre os folds, reportada pra referencia (nao ha mais
+    um treino final separado que a use, ver docstring do modulo);
     modelos_e_scalers e None a menos que devolver_modelos=True, caso em que
-    e a lista [(modelo, scaler), ...] dos 4 modelos do CV, prontos pra
-    ensemble (ver avaliar_ensemble()).
+    e a lista [(modelo, scaler), ...] dos N modelos do CV, prontos pra
+    ensemble (ver avaliar_ensemble() e salvar_ensemble()).
     """
     if sinalizadores_train_full is None:
         print("AVISO: sem sinalizadores_train -- pulando validacao cruzada.")
@@ -274,51 +280,26 @@ def avaliar_ensemble(
     return float((preds == y_test).mean())
 
 
-def treinar_epocas_fixas(
-    X_train_full,
-    y_train_full,
-    n_classes,
-    dispositivo,
-    n_epocas: int,
+def salvar_ensemble(
+    modelos_e_scalers: list,
     salvar_em: str,
     classes: list[str],
     usar_velocidade: bool = USAR_VELOCIDADE,
     usar_atencao: bool = USAR_ATENCAO,
-) -> "ClassificadorLSTM":
+) -> None:
     """
-    Treino final de producao: usa TODOS os sinalizadores de treino (sem
-    separar validacao) por um numero FIXO de epocas -- vindo da mediana do
-    CV. Sem validacao pra fazer early stopping por dois motivos: (1) toda
-    pessoa disponivel deveria ir pro treino, ja que sao so 12 no total, e
-    (2) o CV ja mostrou que escolher o checkpoint via um unico split
-    pequeno de validacao e instavel demais pra confiar (ver historico).
+    Salva os N modelos do CV (e seus scalers) como o artefato de producao
+    -- um unico arquivo com uma LISTA de state_dicts em vez de um
+    state_dict so. inferencia.py e avaliacao.py carregam essa lista e
+    fazem a media do softmax dos N modelos (ver avaliar_ensemble()).
+
+    Formato interno, nao afeta o Contrato C (predict() continua devolvendo
+    o mesmo dict) -- so muda o que tem dentro de modelo_melhor.pt/scaler.pkl.
     """
-    ds_treino, pesos_classe = _preparar_treino(X_train_full, y_train_full, n_classes, usar_velocidade)
-    dl_treino = DataLoader(ds_treino, batch_size=BATCH_SIZE, shuffle=True)
-
-    n_features = ds_treino.X.shape[-1]
-    modelo = ClassificadorLSTM(n_features=n_features, n_classes=n_classes, usar_atencao=usar_atencao).to(dispositivo)
-    otimizador = torch.optim.Adam(modelo.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-    criterio = nn.CrossEntropyLoss(weight=pesos_classe.to(dispositivo))
-
-    modelo.train()
-    for epoca in range(1, n_epocas + 1):
-        perda_total = 0.0
-        for x, y in dl_treino:
-            x, y = x.to(dispositivo), y.to(dispositivo)
-            otimizador.zero_grad()
-            logits = modelo(x)
-            perda = criterio(logits, y)
-            perda.backward()
-            torch.nn.utils.clip_grad_norm_(modelo.parameters(), GRAD_CLIP_NORM)
-            otimizador.step()
-            perda_total += perda.item() * x.size(0)
-        perda_media = perda_total / len(ds_treino)
-        print(f"  Epoca {epoca:03d}/{n_epocas} | perda_treino={perda_media:.4f}")
-
+    n_features = modelos_e_scalers[0][0].lstm.input_size
     torch.save(
         {
-            "state_dict": modelo.state_dict(),
+            "state_dicts": [modelo.state_dict() for modelo, _ in modelos_e_scalers],
             "n_features": n_features,
             "vocabulario": classes,
             "usar_velocidade": usar_velocidade,
@@ -327,9 +308,7 @@ def treinar_epocas_fixas(
         os.path.join(salvar_em, "modelo_melhor.pt"),
     )
     with open(os.path.join(salvar_em, "scaler.pkl"), "wb") as f:
-        pickle.dump(ds_treino.scaler, f)
-
-    return modelo
+        pickle.dump([scaler for _, scaler in modelos_e_scalers], f)
 
 
 def treinar() -> None:
@@ -344,26 +323,20 @@ def treinar() -> None:
     X_train_full, y_train_full = dados["X_train"], dados["y_train"]
     sinalizadores_train_full = dados.get("sinalizadores_train")
 
-    epoca_final, _ = validar_cruzado(X_train_full, y_train_full, sinalizadores_train_full, len(classes), dispositivo)
-    if epoca_final is None:
-        epoca_final = MAX_EPOCAS // 2  # fallback sem sinalizador pra guiar o CV
-
-    print(f"\n=== Treino final (producao, 100% do treino, {epoca_final} epocas) ===")
-    print(f"Treino: {len(y_train_full)} (x2 com espelhamento) | Teste (holdout): {len(dados['y_test'])}")
-
-    modelo = treinar_epocas_fixas(
-        X_train_full, y_train_full, len(classes), dispositivo, epoca_final, DIR_SAIDA, classes
+    _, modelos_e_scalers = validar_cruzado(
+        X_train_full, y_train_full, sinalizadores_train_full, len(classes), dispositivo, devolver_modelos=True
     )
+    if not modelos_e_scalers:
+        raise RuntimeError("CV nao devolveu modelos (sem sinalizadores_train?) -- nao ha ensemble pra salvar.")
 
-    with open(os.path.join(DIR_SAIDA, "scaler.pkl"), "rb") as f:
-        scaler = pickle.load(f)
+    print(f"\n=== Producao: ensemble dos {len(modelos_e_scalers)} modelos do CV ===")
+    print(f"Treino: {len(y_train_full)} (x2 com espelhamento, por fold) | Teste (holdout): {len(dados['y_test'])}")
+
+    salvar_ensemble(modelos_e_scalers, DIR_SAIDA, classes)
 
     # teste final -- usado UMA UNICA VEZ, so para reportar o numero real
-    X_test_prep = adicionar_features_velocidade(dados["X_test"]) if USAR_VELOCIDADE else dados["X_test"]
-    ds_teste = LibrasLandmarksDataset(X_test_prep, dados["y_test"], scaler=scaler, fit_scaler=False, augment=False)
-    dl_teste = DataLoader(ds_teste, batch_size=BATCH_SIZE, shuffle=False)
-    acc_teste = avaliar_rapido(modelo, dl_teste, dispositivo)
-    print(f"Acuracia final no TESTE (holdout de sinalizador desconhecido) = {acc_teste:.4f}")
+    acc_teste = avaliar_ensemble(modelos_e_scalers, dados["X_test"], dados["y_test"], dispositivo)
+    print(f"Acuracia final do ENSEMBLE no TESTE (holdout de sinalizador desconhecido) = {acc_teste:.4f}")
 
 
 def avaliar_rapido(modelo, dl, dispositivo) -> float:

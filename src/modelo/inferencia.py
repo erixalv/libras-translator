@@ -15,30 +15,46 @@ CAMINHO_MODELO = os.path.join(DIR_PROCESSED, "modelo_melhor.pt")
 CAMINHO_SCALER = os.path.join(DIR_PROCESSED, "scaler.pkl")
 
 _vocabulario = carregar_vocabulario()
-_modelo = None
-_scaler = None
+_modelos = None
+_scalers = None
 _usar_velocidade = True
 _dispositivo = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+def carregar_ensemble(dispositivo: torch.device):
+    """
+    Le o checkpoint salvo por salvar_ensemble() (treino.py): uma LISTA de
+    state_dicts (um por modelo do CV) e uma lista de scalers correspondente
+    em scaler.pkl. Unica fonte de verdade do formato em disco -- usada por
+    predict() aqui embaixo e por avaliacao.py, pra nao duplicar a logica de
+    carregamento.
+    """
+    checkpoint = torch.load(CAMINHO_MODELO, map_location=dispositivo)
+    with open(CAMINHO_SCALER, "rb") as f:
+        scalers = pickle.load(f)
+
+    usar_atencao = checkpoint.get("usar_atencao", False)
+    modelos = []
+    for state_dict in checkpoint["state_dicts"]:
+        modelo = ClassificadorLSTM(
+            n_features=checkpoint["n_features"],
+            n_classes=len(checkpoint["vocabulario"]),
+            usar_atencao=usar_atencao,
+        )
+        modelo.load_state_dict(state_dict)
+        modelo.to(dispositivo).eval()
+        modelos.append(modelo)
+
+    return modelos, scalers, checkpoint["vocabulario"], checkpoint.get("usar_velocidade", False)
+
+
 def _carregar_modelo_real():
-    global _modelo, _scaler, _usar_velocidade
-    if _modelo is not None:
+    global _modelos, _scalers, _usar_velocidade, _vocabulario
+    if _modelos is not None:
         return
-    checkpoint = torch.load(CAMINHO_MODELO, map_location=_dispositivo)
     # usa a ordem de classes salva no checkpoint (vinda do .npz), nao a
     # ordem do vocabulario.json -- e essa que bate com os indices do modelo
-    global _vocabulario
-    _vocabulario = checkpoint["vocabulario"]
-    _usar_velocidade = checkpoint.get("usar_velocidade", False)
-    usar_atencao = checkpoint.get("usar_atencao", False)
-    _modelo = ClassificadorLSTM(
-        n_features=checkpoint["n_features"], n_classes=len(checkpoint["vocabulario"]), usar_atencao=usar_atencao
-    )
-    _modelo.load_state_dict(checkpoint["state_dict"])
-    _modelo.to(_dispositivo).eval()
-    with open(CAMINHO_SCALER, "rb") as f:
-        _scaler = pickle.load(f)
+    _modelos, _scalers, _vocabulario, _usar_velocidade = carregar_ensemble(_dispositivo)
 
 
 def predict(sequencia: np.ndarray, top_k: int = 5) -> dict:
@@ -49,11 +65,16 @@ def predict(sequencia: np.ndarray, top_k: int = 5) -> dict:
     na barra lateral do app), senao o limiar vira fixo e a barra lateral
     para de fazer efeito abaixo dele.
 
+    A confianca vem da MEDIA do softmax dos N modelos do ensemble (ver
+    treino.py: salvar_ensemble()/avaliar_ensemble()) -- reduz a variancia
+    de um unico modelo sem precisar de dado novo. Testado no holdout real:
+    48.4% de acuracia com ensemble vs 40.8% com o modelo unico anterior.
+
     Tambem devolve "top_k": as `top_k` classes mais prováveis (gloss +
     confidence), pra UI mostrar nao so a resposta escolhida mas as
-    candidatas -- util com um modelo que erra bastante (~40% em
-    sinalizador nunca visto): a resposta certa costuma aparecer entre as
-    top poucas mesmo quando nao vence.
+    candidatas -- util com um modelo que ainda erra bastante em sinalizador
+    nunca visto: a resposta certa costuma aparecer entre as top poucas
+    mesmo quando nao vence.
     """
     timestamp_ms = int(time.time() * 1000)
     modelo_existe = os.path.exists(CAMINHO_MODELO) and os.path.exists(CAMINHO_SCALER)
@@ -71,17 +92,20 @@ def predict(sequencia: np.ndarray, top_k: int = 5) -> dict:
 
     _carregar_modelo_real()
     seq = adicionar_features_velocidade(sequencia) if _usar_velocidade else sequencia
-    x = _scaler.transform(seq)
-    x = torch.from_numpy(x.astype(np.float32)).unsqueeze(0).to(_dispositivo)
 
+    probs_por_modelo = []
     with torch.no_grad():
-        logits = _modelo(x)
-        probs = torch.softmax(logits, dim=1).squeeze(0)
-        indice = int(torch.argmax(probs).item())
-        confidence = float(probs[indice].item())
+        for modelo, scaler in zip(_modelos, _scalers):
+            x = scaler.transform(seq)
+            x = torch.from_numpy(x.astype(np.float32)).unsqueeze(0).to(_dispositivo)
+            probs_por_modelo.append(torch.softmax(modelo(x), dim=1).squeeze(0))
+    probs = torch.stack(probs_por_modelo).mean(dim=0)
 
-        k = min(top_k, probs.shape[0])
-        top_confs, top_indices = torch.topk(probs, k)
+    indice = int(torch.argmax(probs).item())
+    confidence = float(probs[indice].item())
+
+    k = min(top_k, probs.shape[0])
+    top_confs, top_indices = torch.topk(probs, k)
 
     lista_top_k = [
         {"gloss": _vocabulario[i], "confidence": round(float(c), 4)}
