@@ -175,9 +175,9 @@ def _detectar_bruto(frame: np.ndarray) -> Optional[dict]:
                 label = handedness[0].category_name  # "Left" ou "Right"
                 lms = [[p.x, p.y, p.z] for p in hand_lms]
                 if label == "Left":
-                    left_hand_list = lms
-                elif label == "Right":
                     right_hand_list = lms
+                elif label == "Right":
+                    left_hand_list = lms
 
         return {"pose": pose_list, "left_hand": left_hand_list, "right_hand": right_hand_list}
 
@@ -234,7 +234,9 @@ def _desenhar_landmarks(
     "tasks", que usam a mesma numeracao de landmarks.
     """
     import cv2
-    import mediapipe as mp
+
+    POSE_CONNS = [(0, 1), (1, 2), (2, 3), (3, 7), (0, 4), (4, 5), (5, 6), (6, 8), (9, 10), (11, 12), (11, 13), (13, 15), (15, 17), (15, 19), (15, 21), (17, 19), (12, 14), (14, 16), (16, 18), (16, 20), (16, 22), (18, 20), (11, 23), (12, 24), (23, 24), (23, 25), (24, 26), (25, 27), (26, 28), (27, 29), (28, 30), (29, 31), (30, 32), (27, 31), (28, 32)]
+    HAND_CONNS = [(0, 1), (1, 5), (9, 13), (13, 17), (5, 9), (0, 17), (1, 2), (2, 3), (3, 4), (5, 6), (6, 7), (7, 8), (9, 10), (10, 11), (11, 12), (13, 14), (14, 15), (15, 16), (17, 18), (18, 19), (19, 20)]
 
     frame_anotado = frame.copy()
     h, w = frame_anotado.shape[:2]
@@ -251,9 +253,9 @@ def _desenhar_landmarks(
         for p in pontos:
             cv2.circle(frame_anotado, px(p), 3, cor, -1, cv2.LINE_AA)
 
-    desenhar(pose, mp.solutions.pose.POSE_CONNECTIONS, (255, 200, 0))
-    desenhar(mao_esq, mp.solutions.hands.HAND_CONNECTIONS, (0, 220, 0))
-    desenhar(mao_dir, mp.solutions.hands.HAND_CONNECTIONS, (0, 0, 255))
+    desenhar(pose, POSE_CONNS, (255, 200, 0))
+    desenhar(mao_esq, HAND_CONNS, (0, 220, 0))
+    desenhar(mao_dir, HAND_CONNS, (0, 0, 255))
 
     return frame_anotado
 

@@ -161,48 +161,93 @@ def main():
         st.sidebar.markdown('<span class="badge-real">MODO REAL ATIVO</span>', unsafe_allow_html=True)
 
     # ==========================================
-    # PAINEL PRINCIPAL - LAYOUT EM COLUNAS
+    # ABAS
     # ==========================================
-    col_video, col_painel = st.columns([1.6, 1.0])
+    aba_tradutor, aba_treinamento = st.tabs(["🗣️ Tradutor", "📚 Vídeos de Treinamento"])
 
-    with col_video:
-        st.subheader("📹 Fluxo de Vídeo com Overlay")
-        placeholder_video = st.empty()
+    with aba_tradutor:
+        # ==========================================
+        # PAINEL PRINCIPAL - LAYOUT EM COLUNAS
+        # ==========================================
+        col_video, col_painel = st.columns([1.6, 1.0])
+
+        with col_video:
+            st.subheader("📹 Fluxo de Vídeo com Overlay")
+            placeholder_video = st.empty()
+            
+            # Botões de início e parada
+            col_btn1, col_btn2 = st.columns(2)
+            with col_btn1:
+                if st.button("▶️ Iniciar Tradução", use_container_width=True, type="primary"):
+                    st.session_state.executando = True
+            with col_btn2:
+                if st.button("⏹️ Parar", use_container_width=True):
+                    st.session_state.executando = False
+
+        with col_painel:
+            st.subheader("📊 Painel de Tradução")
+            
+            placeholder_frase = st.empty()
+            placeholder_glosas = st.empty()
+            placeholder_inst = st.empty()
+            placeholder_topk = st.empty()
+            placeholder_status = st.empty()
+
+            # Renderização inicial vazia do painel
+            with placeholder_frase.container():
+                st.markdown("""
+                <div class="metric-card">
+                    <div class="metric-label">💬 Frase Traduzida em Português</div>
+                    <div class="metric-value-frase">...</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            with placeholder_glosas.container():
+                st.markdown("""
+                <div class="metric-card">
+                    <div class="metric-label">🖐️ Glosas no Buffer Acumulado</div>
+                    <div class="metric-value-glosas">Nenhuma glosa aceita ainda</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+    with aba_treinamento:
+        st.subheader("📹 Análise de Landmarks nos Dados de Treino")
+        dir_treino = os.path.join(RAIZ, "data", "raw_gravacoes", "treino")
         
-        # Botões de início e parada
-        col_btn1, col_btn2 = st.columns(2)
-        with col_btn1:
-            if st.button("▶️ Iniciar Tradução", use_container_width=True, type="primary"):
-                st.session_state.executando = True
-        with col_btn2:
-            if st.button("⏹️ Parar", use_container_width=True):
-                st.session_state.executando = False
+        if not os.path.exists(dir_treino):
+            st.warning("Diretório de treino não encontrado.")
+        else:
+            sinais = sorted(os.listdir(dir_treino))
+            col_sinal, col_video_sel = st.columns(2)
+            with col_sinal:
+                sinal_selecionado = st.selectbox("Selecione o Sinal:", sinais)
+            
+            dir_sinal = os.path.join(dir_treino, sinal_selecionado)
+            videos = sorted([v for v in os.listdir(dir_sinal) if v.endswith(".mp4")])
+            with col_video_sel:
+                video_selecionado = st.selectbox("Selecione o Vídeo:", videos)
 
-    with col_painel:
-        st.subheader("📊 Painel de Tradução")
-        
-        placeholder_frase = st.empty()
-        placeholder_glosas = st.empty()
-        placeholder_inst = st.empty()
-        placeholder_topk = st.empty()
-        placeholder_status = st.empty()
-
-        # Renderização inicial vazia do painel
-        with placeholder_frase.container():
-            st.markdown("""
-            <div class="metric-card">
-                <div class="metric-label">💬 Frase Traduzida em Português</div>
-                <div class="metric-value-frase">...</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        with placeholder_glosas.container():
-            st.markdown("""
-            <div class="metric-card">
-                <div class="metric-label">🖐️ Glosas no Buffer Acumulado</div>
-                <div class="metric-value-glosas">Nenhuma glosa aceita ainda</div>
-            </div>
-            """, unsafe_allow_html=True)
+            caminho_video = os.path.join(dir_sinal, video_selecionado)
+            
+            if st.button("▶️ Analisar Vídeo", type="primary"):
+                placeholder_treino = st.empty()
+                cap_t = cv2.VideoCapture(caminho_video)
+                from src.landmarks.extrator_mediapipe import extrair_landmarks_anotado
+                
+                while cap_t.isOpened():
+                    ret, frame_treino = cap_t.read()
+                    if not ret:
+                        break
+                    
+                    # Usa a função do extrator para desenhar os landmarks
+                    _, frame_anotado = extrair_landmarks_anotado(frame_treino)
+                    
+                    frame_rgb = cv2.cvtColor(frame_anotado, cv2.COLOR_BGR2RGB)
+                    placeholder_treino.image(frame_rgb, channels="RGB", use_column_width=True)
+                    time.sleep(0.05)
+                
+                cap_t.release()
+                st.success("Análise concluída!")
 
     # ==========================================
     # LOOP DE PROCESSAMENTO DE VÍDEO
