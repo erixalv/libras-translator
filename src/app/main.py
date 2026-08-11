@@ -95,7 +95,7 @@ st.markdown("""
 def inicializar_estado():
     """Inicializa variáveis de estado da sessão Streamlit."""
     if "pipeline" not in st.session_state:
-        st.session_state.pipeline = PipelineIntegrador(modo_mock=True, limiar_confianca=0.60)
+        st.session_state.pipeline = PipelineIntegrador(modo_mock=False, limiar_confianca=0.60)
     if "executando" not in st.session_state:
         st.session_state.executando = False
 
@@ -122,7 +122,7 @@ def main():
     )
 
     # 2. Toggle Modo Mock / Real
-    modo_mock = st.sidebar.toggle("Modo Mock (Simulação)", value=True)
+    modo_mock = st.sidebar.toggle("Modo Mock (Simulação)", value=False)
 
     # 3. Slider de Confiança
     confianca_slider = st.sidebar.slider(

@@ -77,16 +77,19 @@ class PipelineIntegrador:
         """Carrega dinamicamente os módulos reais se modo_mock=False."""
         if not self._modo_mock:
             try:
-                from src.landmarks.extrator_mediapipe import extrair_landmarks, construir_sequencia
+                from src.landmarks.extrator_mediapipe import extrair_landmarks, construir_sequencia, _obter_extrator
                 from src.modelo.inferencia import predict as predict_real
                 from src.linguagem.regras_gramaticais import glosas_para_frase as glosas_para_frase_real
+
+                if _obter_extrator() is None:
+                    raise RuntimeError("MediaPipe nao esta disponivel neste ambiente.")
 
                 self._fn_extrair_landmarks = extrair_landmarks
                 self._fn_construir_sequencia = construir_sequencia
                 self._fn_predict = predict_real
                 self._fn_glosas_para_frase = glosas_para_frase_real
             except (ImportError, Exception) as e:
-                # Se faltar algum módulo real, faz fallback ou alerta
+                # Se faltar algum módulo real ou mediapipe holistic, faz fallback ou alerta
                 print(f"[AVISO PipelineIntegrador] Erro ao carregar módulos reais: {e}. Revertendo para modo_mock=True.")
                 self._modo_mock = True
                 self._fn_predict = predict_mock

@@ -3,7 +3,7 @@ import numpy as np
 
 
 def test_predict_retorna_formato_esperado():
-    seq = np.random.randn(30, 258).astype(np.float32)
+    seq = np.random.randn(30, 260).astype(np.float32)
     resultado = predict(seq)
     assert "gloss" in resultado
     assert "confidence" in resultado

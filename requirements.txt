@@ -1,5 +1,5 @@
 opencv-python==4.10.*
-mediapipe==0.10.14    # >=0.10.21 remove a API mp.solutions (Holistic) usada em extrator_mediapipe.py
+mediapipe>=0.10.14,<1.0.0    # mantem suporte a mp.solutions.holistic em extrator_mediapipe.py
 numpy
 pandas
 scikit-learn
