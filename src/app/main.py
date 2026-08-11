@@ -95,7 +95,7 @@ st.markdown("""
 def inicializar_estado():
     """Inicializa variáveis de estado da sessão Streamlit."""
     if "pipeline" not in st.session_state:
-        st.session_state.pipeline = PipelineIntegrador(modo_mock=False, limiar_confianca=0.60)
+        st.session_state.pipeline = PipelineIntegrador(modo_mock=False, limiar_confianca=0.60, mostrar_landmarks=True)
     if "executando" not in st.session_state:
         st.session_state.executando = False
 
@@ -124,6 +124,13 @@ def main():
     # 2. Toggle Modo Mock / Real
     modo_mock = st.sidebar.toggle("Modo Mock (Simulação)", value=False)
 
+    # 2.1 Toggle de visualização dos landmarks (debug: confirma se a mão está sendo captada)
+    mostrar_landmarks = st.sidebar.toggle(
+        "🖐️ Mostrar landmarks detectados",
+        value=True,
+        help="Desenha os pontos de pose/mãos que o MediaPipe está captando, direto no vídeo."
+    )
+
     # 3. Slider de Confiança
     confianca_slider = st.sidebar.slider(
         "Limiar de Confiança:",
@@ -142,6 +149,7 @@ def main():
     # Atualiza configurações no pipeline integrador
     st.session_state.pipeline.modo_mock = modo_mock
     st.session_state.pipeline.limiar_confianca = confianca_slider
+    st.session_state.pipeline.mostrar_landmarks = mostrar_landmarks
 
     st.sidebar.divider()
     st.sidebar.markdown("**Status da Integração:**")
@@ -176,6 +184,7 @@ def main():
         placeholder_frase = st.empty()
         placeholder_glosas = st.empty()
         placeholder_inst = st.empty()
+        placeholder_topk = st.empty()
         placeholder_status = st.empty()
 
         # Renderização inicial vazia do painel
@@ -239,7 +248,7 @@ def main():
 
             # Converte BGR -> RGB para exibição no Streamlit
             frame_rgb = cv2.cvtColor(frame_overlay, cv2.COLOR_BGR2RGB)
-            placeholder_video.image(frame_rgb, channels="RGB", use_container_width=True)
+            placeholder_video.image(frame_rgb, channels="RGB", use_column_width=True)
 
             # Atualiza o painel lateral com as métricas em tempo real
             frase_txt = status["frase_atual"] if status["frase_atual"] else "Aguardando término da frase..."
@@ -266,6 +275,15 @@ def main():
                 glosa_at = status["glosa_atual"]
                 conf_at = status["confianca_atual"]
                 st.markdown(f"**Sinal Atual Detectado:** `{glosa_at}` | **Confiança:** `{conf_at * 100:.1f}%`")
+
+            with placeholder_topk.container():
+                top_k = status.get("top_k_atual", [])
+                if top_k:
+                    st.caption("🔎 Palavras mais prováveis (não só a escolhida):")
+                    for candidato in top_k:
+                        gloss_c = candidato.get("gloss", "?")
+                        conf_c = float(candidato.get("confidence", 0.0))
+                        st.progress(min(max(conf_c, 0.0), 1.0), text=f"{gloss_c} — {conf_c * 100:.1f}%")
 
             # Pequena pausa para cadência visual de ~20 FPS no Streamlit
             time.sleep(0.05)

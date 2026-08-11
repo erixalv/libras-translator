@@ -46,7 +46,16 @@ def carregar_vocabulario_mock() -> List[str]:
 _VOCABULARIO_MOCK = carregar_vocabulario_mock()
 
 
-def predict(sequencia: Optional[np.ndarray] = None) -> Dict[str, Any]:
+def _top_k_mock(gloss_vencedor: str, confidence_vencedor: float, top_k: int) -> List[Dict[str, Any]]:
+    resto = [g for g in _VOCABULARIO_MOCK if g != gloss_vencedor]
+    candidatos = random.sample(resto, min(top_k - 1, len(resto)))
+    confs = sorted((round(random.uniform(0.05, confidence_vencedor), 4) for _ in candidatos), reverse=True)
+    lista = [{"gloss": gloss_vencedor, "confidence": round(confidence_vencedor, 4)}]
+    lista += [{"gloss": g, "confidence": c} for g, c in zip(candidatos, confs)]
+    return lista
+
+
+def predict(sequencia: Optional[np.ndarray] = None, top_k: int = 5) -> Dict[str, Any]:
     """
     Stub da função de inferência (Contrato C - Pessoa 3 -> Pessoa 5).
 
@@ -55,7 +64,7 @@ def predict(sequencia: Optional[np.ndarray] = None) -> Dict[str, Any]:
                    o stub gera predição mock válida.
 
     Returns:
-        Dict no formato {"gloss": str, "confidence": float, "timestamp_ms": int}
+        Dict no formato {"gloss": str, "confidence": float, "timestamp_ms": int, "top_k": [...]}
     """
     timestamp_ms = int(time.time() * 1000)
 
@@ -65,7 +74,8 @@ def predict(sequencia: Optional[np.ndarray] = None) -> Dict[str, Any]:
         return {
             "gloss": "NENHUM",
             "confidence": confidence,
-            "timestamp_ms": timestamp_ms
+            "timestamp_ms": timestamp_ms,
+            "top_k": _top_k_mock(random.choice(_VOCABULARIO_MOCK), confidence, top_k),
         }
 
     gloss = random.choice(_VOCABULARIO_MOCK)
@@ -74,7 +84,8 @@ def predict(sequencia: Optional[np.ndarray] = None) -> Dict[str, Any]:
     return {
         "gloss": gloss,
         "confidence": confidence,
-        "timestamp_ms": timestamp_ms
+        "timestamp_ms": timestamp_ms,
+        "top_k": _top_k_mock(gloss, confidence, top_k),
     }
 
 

@@ -14,8 +14,6 @@ DIR_PROCESSED = os.path.join(RAIZ, "data", "processed")
 CAMINHO_MODELO = os.path.join(DIR_PROCESSED, "modelo_melhor.pt")
 CAMINHO_SCALER = os.path.join(DIR_PROCESSED, "scaler.pkl")
 
-THRESHOLD_CONFIANCA = 0.6
-
 _vocabulario = carregar_vocabulario()
 _modelo = None
 _scaler = None
@@ -38,14 +36,33 @@ def _carregar_modelo_real():
         _scaler = pickle.load(f)
 
 
-def predict(sequencia: np.ndarray) -> dict:
+def predict(sequencia: np.ndarray, top_k: int = 5) -> dict:
+    """
+    Devolve sempre a classe de maior probabilidade e sua confianca real --
+    NAO decide aqui se a confianca e suficiente pra aceitar a glosa. Quem
+    decide isso e o chamador (PipelineIntegrador.limiar_confianca, ajustavel
+    na barra lateral do app), senao o limiar vira fixo e a barra lateral
+    para de fazer efeito abaixo dele.
+
+    Tambem devolve "top_k": as `top_k` classes mais prováveis (gloss +
+    confidence), pra UI mostrar nao so a resposta escolhida mas as
+    candidatas -- util com um modelo que erra bastante (~40% em
+    sinalizador nunca visto): a resposta certa costuma aparecer entre as
+    top poucas mesmo quando nao vence.
+    """
     timestamp_ms = int(time.time() * 1000)
     modelo_existe = os.path.exists(CAMINHO_MODELO) and os.path.exists(CAMINHO_SCALER)
 
     if not modelo_existe:
-        gloss = random.choice(_vocabulario)
-        confidence = round(random.uniform(0.55, 0.95), 2)
-        return {"gloss": gloss, "confidence": confidence, "timestamp_ms": timestamp_ms}
+        candidatos = random.sample(_vocabulario, min(top_k, len(_vocabulario)))
+        confs = sorted((round(random.uniform(0.1, 0.95), 4) for _ in candidatos), reverse=True)
+        gloss, confidence = candidatos[0], confs[0]
+        return {
+            "gloss": gloss,
+            "confidence": confidence,
+            "timestamp_ms": timestamp_ms,
+            "top_k": [{"gloss": g, "confidence": c} for g, c in zip(candidatos, confs)],
+        }
 
     _carregar_modelo_real()
     x = _scaler.transform(sequencia)
@@ -57,10 +74,20 @@ def predict(sequencia: np.ndarray) -> dict:
         indice = int(torch.argmax(probs).item())
         confidence = float(probs[indice].item())
 
-    if confidence < THRESHOLD_CONFIANCA:
-        return {"gloss": "NENHUM", "confidence": round(confidence, 4), "timestamp_ms": timestamp_ms}
+        k = min(top_k, probs.shape[0])
+        top_confs, top_indices = torch.topk(probs, k)
 
-    return {"gloss": _vocabulario[indice], "confidence": round(confidence, 4), "timestamp_ms": timestamp_ms}
+    lista_top_k = [
+        {"gloss": _vocabulario[i], "confidence": round(float(c), 4)}
+        for i, c in zip(top_indices.tolist(), top_confs.tolist())
+    ]
+
+    return {
+        "gloss": _vocabulario[indice],
+        "confidence": round(confidence, 4),
+        "timestamp_ms": timestamp_ms,
+        "top_k": lista_top_k,
+    }
 
 
 if __name__ == "__main__":

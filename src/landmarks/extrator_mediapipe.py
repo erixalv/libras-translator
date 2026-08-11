@@ -2,6 +2,7 @@
 Extracao de landmarks com MediaPipe (Holistic ou Tasks API). Implementa o Contrato B.
 
     extrair_landmarks(frame)              -> dict (1 frame)
+    extrair_landmarks_anotado(frame)      -> (dict, frame com pose/maos desenhados) -- so p/ debug visual ao vivo
     construir_sequencia(lista_de_dicts)   -> np.ndarray (30, N_FEATURES)
 
 ATENCAO ESPELHAMENTO: o MediaPipe rotula left/right pela anatomia da pessoa,
@@ -127,13 +128,14 @@ def _reiniciar_holistic():
     _modo_extracao = None
 
 
-def extrair_landmarks(
-    frame: np.ndarray, frame_id: int = 0, timestamp_ms: int = 0
-) -> Optional[dict]:
+def _detectar_bruto(frame: np.ndarray) -> Optional[dict]:
     """
-    Recebe 1 frame (480, 640, 3) BGR uint8 (Contrato A).
-    Devolve 1 dict no formato do Contrato B, ja normalizado pelo centro dos
-    ombros. Devolve None se nenhuma pose for detectada.
+    Roda o Holistic/Tasks 1 vez e devolve pose/maos em coordenadas de imagem
+    (fracao 0..1 da largura/altura do frame, ainda SEM a normalizacao pelo
+    centro dos ombros). Usado tanto por extrair_landmarks() (Contrato B)
+    quanto por extrair_landmarks_anotado() (desenha os pontos no frame) --
+    assim os dois reaproveitam a MESMA inferencia, sem rodar o MediaPipe
+    2x por frame.
     """
     import cv2
     import mediapipe as mp
@@ -148,15 +150,11 @@ def extrair_landmarks(
         res = _holistic.process(frame_rgb)
         if res.pose_landmarks is None:
             return None
-
-        bruto = {
-            "frame_id": int(frame_id),
-            "timestamp_ms": int(timestamp_ms),
+        return {
             "pose": [[p.x, p.y, p.z, p.visibility] for p in res.pose_landmarks.landmark],
             "left_hand": [[p.x, p.y, p.z] for p in res.left_hand_landmarks.landmark] if res.left_hand_landmarks else None,
             "right_hand": [[p.x, p.y, p.z] for p in res.right_hand_landmarks.landmark] if res.right_hand_landmarks else None,
         }
-        return normalizar_registro(bruto)
 
     elif modo == "tasks":
         mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
@@ -181,16 +179,83 @@ def extrair_landmarks(
                 elif label == "Right":
                     right_hand_list = lms
 
-        bruto = {
-            "frame_id": int(frame_id),
-            "timestamp_ms": int(timestamp_ms),
-            "pose": pose_list,
-            "left_hand": left_hand_list,
-            "right_hand": right_hand_list,
-        }
-        return normalizar_registro(bruto)
+        return {"pose": pose_list, "left_hand": left_hand_list, "right_hand": right_hand_list}
 
     return None
+
+
+def extrair_landmarks(
+    frame: np.ndarray, frame_id: int = 0, timestamp_ms: int = 0
+) -> Optional[dict]:
+    """
+    Recebe 1 frame (480, 640, 3) BGR uint8 (Contrato A).
+    Devolve 1 dict no formato do Contrato B, ja normalizado pelo centro dos
+    ombros. Devolve None se nenhuma pose for detectada.
+    """
+    bruto = _detectar_bruto(frame)
+    if bruto is None:
+        return None
+    bruto["frame_id"] = int(frame_id)
+    bruto["timestamp_ms"] = int(timestamp_ms)
+    return normalizar_registro(bruto)
+
+
+def extrair_landmarks_anotado(
+    frame: np.ndarray, frame_id: int = 0, timestamp_ms: int = 0
+) -> Tuple[Optional[dict], np.ndarray]:
+    """
+    Igual extrair_landmarks(), mas tambem devolve uma copia do frame com os
+    pontos de pose/maos desenhados por cima -- so pra visualizacao ao vivo
+    (debug de "esta pegando minha mao?"), nao faz parte do Contrato B e nao
+    e usado no pipeline de treino/dataset.
+    """
+    bruto = _detectar_bruto(frame)
+    if bruto is None:
+        return None, frame
+
+    frame_anotado = _desenhar_landmarks(frame, bruto["pose"], bruto["left_hand"], bruto["right_hand"])
+
+    bruto["frame_id"] = int(frame_id)
+    bruto["timestamp_ms"] = int(timestamp_ms)
+    return normalizar_registro(bruto), frame_anotado
+
+
+def _desenhar_landmarks(
+    frame: np.ndarray,
+    pose: Optional[list],
+    mao_esq: Optional[list],
+    mao_dir: Optional[list],
+) -> np.ndarray:
+    """
+    Desenha pose (ciano) e maos (mao esquerda verde, mao direita vermelha)
+    num frame BGR, usando as coordenadas de imagem 0..1 devolvidas por
+    _detectar_bruto(). As conexoes (POSE_CONNECTIONS/HAND_CONNECTIONS) sao
+    so a topologia dos pontos -- vale tanto pro backend "solutions" quanto
+    "tasks", que usam a mesma numeracao de landmarks.
+    """
+    import cv2
+    import mediapipe as mp
+
+    frame_anotado = frame.copy()
+    h, w = frame_anotado.shape[:2]
+
+    def px(ponto):
+        return int(ponto[0] * w), int(ponto[1] * h)
+
+    def desenhar(pontos, conexoes, cor):
+        if not pontos:
+            return
+        for a, b in conexoes:
+            if a < len(pontos) and b < len(pontos):
+                cv2.line(frame_anotado, px(pontos[a]), px(pontos[b]), cor, 1, cv2.LINE_AA)
+        for p in pontos:
+            cv2.circle(frame_anotado, px(p), 3, cor, -1, cv2.LINE_AA)
+
+    desenhar(pose, mp.solutions.pose.POSE_CONNECTIONS, (255, 200, 0))
+    desenhar(mao_esq, mp.solutions.hands.HAND_CONNECTIONS, (0, 220, 0))
+    desenhar(mao_dir, mp.solutions.hands.HAND_CONNECTIONS, (0, 0, 255))
+
+    return frame_anotado
 
 
 def construir_sequencia(

@@ -1,5 +1,5 @@
 """
-Loop de treino (v6)
+Loop de treino (v7)
 
 Com so 12 sinalizadores distintos no dataset, uma unica divisao
 treino/validacao e loteria: rodando o mesmo treino com o holdout de
@@ -25,7 +25,16 @@ Outros pontos:
     arquiteturas.py: com hidden_size=128/weight_decay=1e-5 originais o
     modelo memorizava o treino (~99%) e generalizava mal (~35-40% em
     sinalizador novo, 804k parametros para 12 pessoas)
-  - gradient clipping e class weights
+  - balanceamento por AMOSTRA (WeightedRandomSampler), nao so por classe:
+    dentro de classes que misturam V-LIBRASIL + gravacao propria (ex.:
+    "Água" com 20 amostras de 4 pessoas vs so 2 do V-LIBRASIL), o
+    gradiente era dominado 10:1 pela fonte majoritaria -- o modelo
+    aprendia "o jeito da gravacao propria" e generalizava mal pro estilo
+    V-LIBRASIL (~5% de acuracia nessa fonte, mesmo com deteccao de mao
+    quase perfeita). _pesos_amostra_balanceados() da peso igual a cada
+    SINALIZADOR INDIVIDUAL dentro da sua classe, nao so a cada classe
+    (ver historico do projeto)
+  - gradient clipping
 
 Hiperparametros de loss/otimizador/batch continuam os da Secao 3.5 do
 CONTRATOS.md (CrossEntropyLoss, Adam, batch=16, ate 100 epocas, paciencia
@@ -42,7 +51,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from sklearn.model_selection import GroupKFold
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from src.modelo.arquiteturas import ClassificadorLSTM
 from src.modelo.dataset import LibrasLandmarksDataset, carregar_npz, espelhar_sequencias
@@ -59,33 +68,53 @@ N_FOLDS_CV = 4  # com 12 sinalizadores, ~3 por fold
 GRAD_CLIP_NORM = 5.0
 
 
-def _pesos_classe_balanceados(y: np.ndarray, n_classes: int) -> torch.Tensor:
+def _pesos_amostra_balanceados(y: np.ndarray, sinalizadores: np.ndarray, n_classes: int) -> np.ndarray:
     """
-    Peso balanceado por classe (n_amostras / (n_classes * contagem)), igual
-    ao class_weight="balanced" do sklearn, mas robusto a classes ausentes
-    neste fold/split: em vez de quebrar (compute_class_weight so aceita
-    classes com pelo menos 1 amostra), da peso neutro (1.0) pra quem nao
-    apareceu -- nao ha gradiente pra essa classe de qualquer forma.
+    Peso por amostra que balanceia DUAS coisas ao mesmo tempo:
+      1. entre classes -- cada classe contribui igual no total (equivalente
+         ao class_weight="balanced" que isso substitui)
+      2. DENTRO de cada classe, entre sinalizadores individuais -- cada
+         pessoa/sinalizador contribui igual dentro da sua classe
+
+    Sem o item 2, uma classe com amostras de fontes muito desiguais (ex.:
+    "Água" com 20 amostras de 4 pessoas da gravacao propria + so 2 do
+    V-LIBRASIL) aprende quase so o "jeito" da fonte majoritaria. Foi isso
+    que explicou o V-LIBRASIL saindo com ~5% de acuracia no teste mesmo
+    tendo a deteccao de mao mais limpa de todo o dataset -- o gradiente
+    dessas classes era dominado 10:1 pela gravacao propria (ver historico
+    do projeto). Usado como pesos de um WeightedRandomSampler, nao como
+    peso de classe no criterio -- os dois juntos duplicariam a correcao.
     """
-    contagem = np.bincount(y, minlength=n_classes).astype(np.float64)
-    pesos = np.where(contagem > 0, contagem.sum() / (n_classes * np.maximum(contagem, 1)), 1.0)
-    return torch.tensor(pesos, dtype=torch.float32)
+    pesos = np.zeros(len(y), dtype=np.float64)
+    for c in np.unique(y):
+        mascara_classe = y == c
+        sinalizadores_da_classe = sinalizadores[mascara_classe]
+        sinalizadores_unicos = np.unique(sinalizadores_da_classe)
+        n_sinalizadores = len(sinalizadores_unicos)
+        for s in sinalizadores_unicos:
+            mascara_s = mascara_classe & (sinalizadores == s)
+            contagem = mascara_s.sum()
+            pesos[mascara_s] = 1.0 / (n_classes * n_sinalizadores * contagem)
+    return pesos
 
 
-def _preparar_treino(X_train: np.ndarray, y_train: np.ndarray, n_classes: int):
-    """Espelha (dobra) o treino e monta o Dataset + pesos de classe -- comum
-    tanto ao treino com early stopping quanto ao treino final de epocas fixas."""
+def _preparar_treino(X_train: np.ndarray, y_train: np.ndarray, sinalizadores_train: np.ndarray, n_classes: int):
+    """Espelha (dobra) o treino e monta o Dataset + pesos por amostra (classe
+    + sinalizador) -- comum tanto ao treino com early stopping quanto ao
+    treino final de epocas fixas."""
     X_train_esp = espelhar_sequencias(X_train)
     X_train_total = np.concatenate([X_train, X_train_esp])
     y_train_total = np.concatenate([y_train, y_train])
+    sinalizadores_total = np.concatenate([sinalizadores_train, sinalizadores_train])
     ds_treino = LibrasLandmarksDataset(X_train_total, y_train_total, fit_scaler=True, augment=True)
-    pesos_classe = _pesos_classe_balanceados(y_train_total, n_classes)
-    return ds_treino, pesos_classe
+    pesos_amostra = _pesos_amostra_balanceados(y_train_total, sinalizadores_total, n_classes)
+    return ds_treino, pesos_amostra
 
 
 def _treinar_um_modelo(
     X_train,
     y_train,
+    sinalizadores_train,
     X_val,
     y_val,
     n_classes: int,
@@ -101,16 +130,17 @@ def _treinar_um_modelo(
     porque um unico split treino/validacao com so 12 sinalizadores se
     mostrou instavel demais pra escolher o checkpoint final (ver historico).
     """
-    ds_treino, pesos_classe = _preparar_treino(X_train, y_train, n_classes)
+    ds_treino, pesos_amostra = _preparar_treino(X_train, y_train, sinalizadores_train, n_classes)
     ds_val = LibrasLandmarksDataset(X_val, y_val, scaler=ds_treino.scaler, fit_scaler=False, augment=False)
 
-    dl_treino = DataLoader(ds_treino, batch_size=BATCH_SIZE, shuffle=True)
+    sampler = WeightedRandomSampler(pesos_amostra, num_samples=len(pesos_amostra), replacement=True)
+    dl_treino = DataLoader(ds_treino, batch_size=BATCH_SIZE, sampler=sampler)
     dl_val = DataLoader(ds_val, batch_size=BATCH_SIZE, shuffle=False)
 
     n_features = X_train.shape[-1]
     modelo = ClassificadorLSTM(n_features=n_features, n_classes=n_classes).to(dispositivo)
     otimizador = torch.optim.Adam(modelo.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-    criterio = nn.CrossEntropyLoss(weight=pesos_classe.to(dispositivo))
+    criterio = nn.CrossEntropyLoss()  # balanceamento ja vem do sampler (classe + sinalizador)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(otimizador, mode="max", factor=0.5, patience=4)
 
     melhor_acc_val = 0.0
@@ -181,6 +211,7 @@ def validar_cruzado(X_train_full, y_train_full, sinalizadores_train_full, n_clas
         acc_val, melhor_epoca, _ = _treinar_um_modelo(
             X_train_full[idx_treino],
             y_train_full[idx_treino],
+            grupos[idx_treino],
             X_train_full[idx_val],
             y_train_full[idx_val],
             n_classes,
@@ -198,7 +229,14 @@ def validar_cruzado(X_train_full, y_train_full, sinalizadores_train_full, n_clas
 
 
 def treinar_epocas_fixas(
-    X_train_full, y_train_full, n_classes, dispositivo, n_epocas: int, salvar_em: str, classes: list[str]
+    X_train_full,
+    y_train_full,
+    sinalizadores_train_full,
+    n_classes,
+    dispositivo,
+    n_epocas: int,
+    salvar_em: str,
+    classes: list[str],
 ) -> "ClassificadorLSTM":
     """
     Treino final de producao: usa TODOS os sinalizadores de treino (sem
@@ -208,13 +246,14 @@ def treinar_epocas_fixas(
     (2) o CV ja mostrou que escolher o checkpoint via um unico split
     pequeno de validacao e instavel demais pra confiar (ver historico).
     """
-    ds_treino, pesos_classe = _preparar_treino(X_train_full, y_train_full, n_classes)
-    dl_treino = DataLoader(ds_treino, batch_size=BATCH_SIZE, shuffle=True)
+    ds_treino, pesos_amostra = _preparar_treino(X_train_full, y_train_full, sinalizadores_train_full, n_classes)
+    sampler = WeightedRandomSampler(pesos_amostra, num_samples=len(pesos_amostra), replacement=True)
+    dl_treino = DataLoader(ds_treino, batch_size=BATCH_SIZE, sampler=sampler)
 
     n_features = X_train_full.shape[-1]
     modelo = ClassificadorLSTM(n_features=n_features, n_classes=n_classes).to(dispositivo)
     otimizador = torch.optim.Adam(modelo.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-    criterio = nn.CrossEntropyLoss(weight=pesos_classe.to(dispositivo))
+    criterio = nn.CrossEntropyLoss()  # balanceamento ja vem do sampler (classe + sinalizador)
 
     modelo.train()
     for epoca in range(1, n_epocas + 1):
@@ -260,8 +299,13 @@ def treinar() -> None:
     print(f"\n=== Treino final (producao, 100% do treino, {epoca_final} epocas) ===")
     print(f"Treino: {len(y_train_full)} (x2 com espelhamento) | Teste (holdout): {len(dados['y_test'])}")
 
+    if sinalizadores_train_full is None:
+        # sem sinalizador pra balancear por fonte -- trata como 1 fonte so
+        # (o balanceamento por sinalizador vira um no-op, so sobra o de classe)
+        sinalizadores_train_full = np.full(len(y_train_full), "desconhecido")
+
     modelo = treinar_epocas_fixas(
-        X_train_full, y_train_full, len(classes), dispositivo, epoca_final, DIR_SAIDA, classes
+        X_train_full, y_train_full, sinalizadores_train_full, len(classes), dispositivo, epoca_final, DIR_SAIDA, classes
     )
 
     with open(os.path.join(DIR_SAIDA, "scaler.pkl"), "rb") as f:
