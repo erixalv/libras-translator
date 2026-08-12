@@ -1,6 +1,6 @@
 """
-Segmentacao de sinais isolados a partir do fluxo continuo de landmarks
-(Contrato B), pro modo real do app ao vivo.
+Segmentacao de sinais isolados a partir do fluxo continuo de landmarks,
+pro modo real do app ao vivo.
 
 O modelo foi treinado com 1 video = 1 sinal completo, comprimido pra 30
 frames (construir_sequencia(..., modo="reamostrar")). Prever direto numa

@@ -1,15 +1,9 @@
 """
-Extracao de landmarks com MediaPipe (Holistic ou Tasks API). Implementa o Contrato B.
+Extracao de landmarks com MediaPipe (Holistic ou Tasks API).
 
     extrair_landmarks(frame)              -> dict (1 frame)
     extrair_landmarks_anotado(frame)      -> (dict, frame com pose/maos desenhados) -- so p/ debug visual ao vivo
     construir_sequencia(lista_de_dicts)   -> np.ndarray (30, N_FEATURES)
-
-ATENCAO ESPELHAMENTO: o MediaPipe rotula left/right pela anatomia da pessoa,
-nao pelo lado da imagem. Mas se a Pessoa 5 aplicar cv2.flip() na webcam para
-o efeito "espelho" antes de chamar extrair_landmarks(), as maos trocam em
-relacao ao dataset e o modelo quebra. Combinar no kickoff: o flip so pode
-acontecer DEPOIS da extracao, na hora de desenhar o overlay.
 """
 
 import os
@@ -132,7 +126,7 @@ def _detectar_bruto(frame: np.ndarray) -> Optional[dict]:
     """
     Roda o Holistic/Tasks 1 vez e devolve pose/maos em coordenadas de imagem
     (fracao 0..1 da largura/altura do frame, ainda SEM a normalizacao pelo
-    centro dos ombros). Usado tanto por extrair_landmarks() (Contrato B)
+    centro dos ombros). Usado tanto por extrair_landmarks()
     quanto por extrair_landmarks_anotado() (desenha os pontos no frame) --
     assim os dois reaproveitam a MESMA inferencia, sem rodar o MediaPipe
     2x por frame.

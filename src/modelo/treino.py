@@ -1,58 +1,5 @@
 """
-Loop de treino (v8)
-
-Com so 12 sinalizadores distintos no dataset, uma unica divisao
-treino/validacao e loteria: rodando o mesmo treino com o holdout de
-validacao trocado, a acc final variou de 11% a 47% (ver historico do
-projeto). Por isso o fluxo aqui e em duas etapas:
-
-  1. validar_cruzado(devolver_modelos=True): GroupKFold por sinalizador
-     (leave-one-signer-out, 1 de fora por fold -- ver N_FOLDS_CV). Cada
-     fold treina do zero e mede acc no holdout
-     -- a media +- desvio entre folds e a estimativa CONFIAVEL de
-     generalizacao pra reportar. Os 4 modelos treinados (cada um viu um
-     recorte diferente de sinalizadores) sao mantidos em vez de
-     descartados.
-  2. salvar_ensemble(): esses 4 modelos + scalers SAO a producao -- em vez
-     de treinar um 5o modelo do zero com 100% do treino (como era antes,
-     ver historico do projeto), a predicao final usa a MEDIA do softmax
-     dos 4 (ver avaliar_ensemble()). Testado no holdout real: 48.4% de
-     acuracia com o ensemble vs 40.8% do modelo unico anterior, mesma
-     arquitetura -- ganho de graca, sem dado novo, so parar de jogar fora
-     os modelos que o CV ja treina. Elimina tambem a necessidade de
-     escolher um numero fixo de epocas via mediana do CV: cada modelo do
-     ensemble ja usa seu proprio checkpoint de early stopping.
-
-O conjunto de teste (X_test/y_test, holdout de sinalizador desconhecido,
-nunca usado no CV) e avaliado UMA UNICA VEZ, no fim, com avaliar_ensemble().
-
-Outros pontos:
-  - augmentation com espelhamento lateral (robustez a mao dominante),
-    ruido e mascaramento de frames
-  - capacidade do modelo (hidden_size) e regularizacao (dropout,
-    weight_decay) calibradas pro tamanho real do dataset -- ver
-    arquiteturas.py: com hidden_size=128/weight_decay=1e-5 originais o
-    modelo memorizava o treino (~99%) e generalizava mal (~35-40% em
-    sinalizador novo, 804k parametros para 12 pessoas)
-  - balanceamento por CLASSE (class_weight balanceado, via CrossEntropyLoss).
-    Tentamos balancear por SINALIZADOR INDIVIDUAL tambem (pra corrigir
-    classes que misturam 20 amostras de gravacao propria com so 2 do
-    V-LIBRASIL) via WeightedRandomSampler, mas empiricamente NAO ajudou o
-    V-LIBRASIL (ficou identico, 4.5%) e piorou a gravacao propria (20% ->
-    9%) -- reponderar so redistribui atencao entre dado que ja existe, nao
-    cria dado novo, e com so 2 amostras de V-LIBRASIL por classe nao tem
-    "atencao extra" que resolva isso. Revertido (ver historico do projeto).
-  - features de velocidade (adicionar_features_velocidade em dataset.py,
-    liga/desliga com USAR_VELOCIDADE) e leitura por atencao em vez de
-    ultimo estado oculto (ClassificadorLSTM(usar_atencao=...), ver
-    arquiteturas.py) -- duas mudancas independentes, testadas via CV antes
-    de virar padrao de producao
-  - gradient clipping
-
-Hiperparametros de loss/otimizador/batch continuam os da Secao 3.5 do
-CONTRATOS.md (CrossEntropyLoss, Adam, batch=16, ate 100 epocas, paciencia
-10 no CV); hidden_size e weight_decay foram ajustados depois de medir
-overfitting severo com os valores originais (ver historico do projeto).
+Loop de treino
 
 Uso:
     python -m src.modelo.treino

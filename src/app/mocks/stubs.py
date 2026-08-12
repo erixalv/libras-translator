@@ -1,5 +1,4 @@
 """
-Mocks / Stubs dos contratos C (predict) e D (glosas_para_frase) para a Pessoa 5.
 Permite o desenvolvimento e teste da interface Streamlit e pipeline de integração
 sem depender dos módulos de Deep Learning ou NLP já treinados.
 """
@@ -57,8 +56,6 @@ def _top_k_mock(gloss_vencedor: str, confidence_vencedor: float, top_k: int) -> 
 
 def predict(sequencia: Optional[np.ndarray] = None, top_k: int = 5) -> Dict[str, Any]:
     """
-    Stub da função de inferência (Contrato C - Pessoa 3 -> Pessoa 5).
-
     Args:
         sequencia: numpy array de shape (30, N_FEATURES). Se None ou de formato arbitrário,
                    o stub gera predição mock válida.
@@ -110,7 +107,6 @@ MAPA_FRASES_MOCK: Dict[tuple, str] = {
 
 def glosas_para_frase(glosas: List[str]) -> Dict[str, Any]:
     """
-    Stub da conversão de glosas em frase em Português (Contrato D - Pessoa 4 -> Pessoa 5).
 
     Args:
         glosas: Lista de strings com as glosas acumuladas.

@@ -223,8 +223,8 @@ def reamostrar(seq: np.ndarray, n_frames: int = 30) -> np.ndarray:
 
 def ultima_janela(seq: np.ndarray, tamanho: int = 30) -> np.ndarray:
     """
-    Pega os ultimos `tamanho` frames de uma sequencia. Usar no fluxo ao vivo
-    (Pessoa 5): a cada frame novo que chega no buffer, recorta so a ponta mais
+    Pega os ultimos `tamanho` frames de uma sequencia. Usar no fluxo ao vivo:
+    a cada frame novo que chega no buffer, recorta so a ponta mais
     recente para prever, sem esperar um sinal "terminar". Se o buffer ainda
     tem menos frames que `tamanho`, reamostra o que existe.
     """

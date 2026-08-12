@@ -1,5 +1,5 @@
 """
-Testes unitários para o módulo App (Pessoa 5):
+Testes unitários para o módulo App:
   - Overlay (desenho de legenda OpenCV)
   - Mocks / Stubs (predict e glosas_para_frase)
   - PipelineIntegrador em modo mock
