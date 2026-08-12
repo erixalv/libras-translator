@@ -23,8 +23,9 @@ def avaliar() -> None:
     dados = carregar_npz()
     classes = dados["classes"]
 
-    modelos, scalers, vocabulario, usar_velocidade = carregar_ensemble(dispositivo)
+    modelos, scalers, vocabulario, usar_velocidade, temperatura, _ = carregar_ensemble(dispositivo)
     assert list(vocabulario) == list(classes), "vocabulario do checkpoint nao bate com o do dataset atual"
+    print(f"Temperatura calibrada: {temperatura:.3f}")
 
     X_test = adicionar_features_velocidade(dados["X_test"]) if usar_velocidade else dados["X_test"]
 
@@ -35,7 +36,7 @@ def avaliar() -> None:
             dl = DataLoader(ds, batch_size=16, shuffle=False)
             probs_modelo = []
             for x, _ in dl:
-                probs_modelo.append(torch.softmax(modelo(x.to(dispositivo)), dim=1).cpu())
+                probs_modelo.append(torch.softmax(modelo(x.to(dispositivo)) / temperatura, dim=1).cpu())
             probs_por_modelo.append(torch.cat(probs_modelo))
 
     probs_media = torch.stack(probs_por_modelo).mean(dim=0)

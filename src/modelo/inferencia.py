@@ -14,20 +14,25 @@ DIR_PROCESSED = os.path.join(RAIZ, "data", "processed")
 CAMINHO_MODELO = os.path.join(DIR_PROCESSED, "modelo_melhor.pt")
 CAMINHO_SCALER = os.path.join(DIR_PROCESSED, "scaler.pkl")
 
+LIMIAR_CONFIANCA_PADRAO = 0.6  # o mesmo do Contrato C (CONTRATOS.md) -- ver _remapear_confianca()
+
 _vocabulario = carregar_vocabulario()
 _modelos = None
 _scalers = None
 _usar_velocidade = True
+_temperatura = 1.0
+_limiares_por_classe: dict[str, float] = {}
 _dispositivo = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def carregar_ensemble(dispositivo: torch.device):
     """
     Le o checkpoint salvo por salvar_ensemble() (treino.py): uma LISTA de
-    state_dicts (um por modelo do CV) e uma lista de scalers correspondente
-    em scaler.pkl. Unica fonte de verdade do formato em disco -- usada por
-    predict() aqui embaixo e por avaliacao.py, pra nao duplicar a logica de
-    carregamento.
+    state_dicts (um por modelo do CV), a lista de scalers correspondente em
+    scaler.pkl, a temperatura calibrada (calibrar_temperatura()) e os
+    limiares por classe (calibrar_limiares_por_classe()). Unica fonte de
+    verdade do formato em disco -- usada por predict() aqui embaixo e por
+    avaliacao.py, pra nao duplicar a logica de carregamento.
     """
     checkpoint = torch.load(CAMINHO_MODELO, map_location=dispositivo)
     with open(CAMINHO_SCALER, "rb") as f:
@@ -45,16 +50,42 @@ def carregar_ensemble(dispositivo: torch.device):
         modelo.to(dispositivo).eval()
         modelos.append(modelo)
 
-    return modelos, scalers, checkpoint["vocabulario"], checkpoint.get("usar_velocidade", False)
+    return (
+        modelos,
+        scalers,
+        checkpoint["vocabulario"],
+        checkpoint.get("usar_velocidade", False),
+        checkpoint.get("temperatura", 1.0),
+        checkpoint.get("limiares_por_classe", {}),
+    )
 
 
 def _carregar_modelo_real():
-    global _modelos, _scalers, _usar_velocidade, _vocabulario
+    global _modelos, _scalers, _usar_velocidade, _vocabulario, _temperatura, _limiares_por_classe
     if _modelos is not None:
         return
     # usa a ordem de classes salva no checkpoint (vinda do .npz), nao a
     # ordem do vocabulario.json -- e essa que bate com os indices do modelo
-    _modelos, _scalers, _vocabulario, _usar_velocidade = carregar_ensemble(_dispositivo)
+    _modelos, _scalers, _vocabulario, _usar_velocidade, _temperatura, _limiares_por_classe = carregar_ensemble(
+        _dispositivo
+    )
+
+
+def _remapear_confianca(conf_bruta: float, limiar_classe: float, limiar_global: float = LIMIAR_CONFIANCA_PADRAO) -> float:
+    """
+    Reescala a confianca bruta de UMA classe especifica de forma monotonica
+    (preserva ordem) de modo que, no limiar_classe calibrado pra ela
+    (calibrar_limiares_por_classe(), via curva precisao-recall no OOF do
+    CV), a confianca reescalada bata exatamente no limiar_global (0.6,
+    Contrato C). Efeito: aplicar o corte fixo de 0.6 por fora (como o app
+    ja faz hoje, PipelineIntegrador.limiar_confianca) passa a se comportar
+    como um limiar calibrado por classe, sem mudar o Contrato C nem a UI.
+    """
+    if not (0.0 < limiar_classe < 1.0):
+        return conf_bruta
+    if conf_bruta >= limiar_classe:
+        return limiar_global + (conf_bruta - limiar_classe) / (1 - limiar_classe) * (1 - limiar_global)
+    return conf_bruta / limiar_classe * limiar_global
 
 
 def predict(sequencia: np.ndarray, top_k: int = 5) -> dict:
@@ -65,10 +96,15 @@ def predict(sequencia: np.ndarray, top_k: int = 5) -> dict:
     na barra lateral do app), senao o limiar vira fixo e a barra lateral
     para de fazer efeito abaixo dele.
 
-    A confianca vem da MEDIA do softmax dos N modelos do ensemble (ver
-    treino.py: salvar_ensemble()/avaliar_ensemble()) -- reduz a variancia
-    de um unico modelo sem precisar de dado novo. Testado no holdout real:
-    48.4% de acuracia com ensemble vs 40.8% com o modelo unico anterior.
+    A confianca vem de tres camadas, nessa ordem: (1) media do softmax dos
+    N modelos do ensemble (ver treino.py: salvar_ensemble()); (2)
+    temperature scaling (calibrar_temperatura()) -- reescala o quao afiada
+    e a distribuicao, pra confianca alta corresponder de fato a mais chance
+    de acerto; (3) remapeamento por classe (_remapear_confianca()) -- so a
+    confianca da classe PREVISTA e das do top_k sao ajustadas pelo limiar
+    calibrado daquela classe especifica, escalado pro limiar global de 0.6
+    continuar fazendo sentido no app. Testado no holdout real (vocabulario
+    de 20 sinais MINDS/V-LIBRASIL): 55.6% de acuracia com o ensemble.
 
     Tambem devolve "top_k": as `top_k` classes mais prováveis (gloss +
     confidence), pra UI mostrar nao so a resposta escolhida mas as
@@ -98,19 +134,27 @@ def predict(sequencia: np.ndarray, top_k: int = 5) -> dict:
         for modelo, scaler in zip(_modelos, _scalers):
             x = scaler.transform(seq)
             x = torch.from_numpy(x.astype(np.float32)).unsqueeze(0).to(_dispositivo)
-            probs_por_modelo.append(torch.softmax(modelo(x), dim=1).squeeze(0))
+            probs_por_modelo.append(torch.softmax(modelo(x) / _temperatura, dim=1).squeeze(0))
     probs = torch.stack(probs_por_modelo).mean(dim=0)
 
     indice = int(torch.argmax(probs).item())
-    confidence = float(probs[indice].item())
+    limiar_indice = _limiares_por_classe.get(_vocabulario[indice], LIMIAR_CONFIANCA_PADRAO)
+    confidence = _remapear_confianca(float(probs[indice].item()), limiar_indice)
 
     k = min(top_k, probs.shape[0])
     top_confs, top_indices = torch.topk(probs, k)
 
     lista_top_k = [
-        {"gloss": _vocabulario[i], "confidence": round(float(c), 4)}
+        {
+            "gloss": _vocabulario[i],
+            "confidence": round(_remapear_confianca(float(c), _limiares_por_classe.get(_vocabulario[i], LIMIAR_CONFIANCA_PADRAO)), 4),
+        }
         for i, c in zip(top_indices.tolist(), top_confs.tolist())
     ]
+    # o remapeamento e por classe (cada uma com seu proprio limiar), entao
+    # a ordem por probabilidade bruta nao garante mais ordem por confianca
+    # reescalada -- reordena pra manter "top_k" de fato decrescente
+    lista_top_k.sort(key=lambda item: item["confidence"], reverse=True)
 
     return {
         "gloss": _vocabulario[indice],
