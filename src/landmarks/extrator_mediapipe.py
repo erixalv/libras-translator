@@ -182,8 +182,8 @@ def extrair_landmarks(
     frame: np.ndarray, frame_id: int = 0, timestamp_ms: int = 0
 ) -> Optional[dict]:
     """
-    Recebe 1 frame (480, 640, 3) BGR uint8 (Contrato A).
-    Devolve 1 dict no formato do Contrato B, ja normalizado pelo centro dos
+    Recebe 1 frame (480, 640, 3) BGR uint8.
+    Devolve 1 dict ja normalizado pelo centro dos
     ombros. Devolve None se nenhuma pose for detectada.
     """
     bruto = _detectar_bruto(frame)
@@ -200,7 +200,7 @@ def extrair_landmarks_anotado(
     """
     Igual extrair_landmarks(), mas tambem devolve uma copia do frame com os
     pontos de pose/maos desenhados por cima -- so pra visualizacao ao vivo
-    (debug de "esta pegando minha mao?"), nao faz parte do Contrato B e nao
+    (debug de "esta pegando minha mao?"), nao
     e usado no pipeline de treino/dataset.
     """
     bruto = _detectar_bruto(frame)
@@ -258,7 +258,7 @@ def construir_sequencia(
     modo: str = "reamostrar",
 ) -> np.ndarray:
     """
-    Lista de dicts (Contrato B) -> array (n_frames, N_FEATURES) float32.
+    Lista de dicts -> array (n_frames, N_FEATURES) float32.
 
     modo="reamostrar": comprime a sequencia inteira em n_frames.
     modo="ultima_janela": pega os ultimos n_frames. Use no fluxo ao vivo.
@@ -279,7 +279,7 @@ def construir_sequencia(
 def extrair_video(caminho: str, passo: int = 1) -> tuple[list[dict], dict]:
     """
     Extrai landmarks de um arquivo de video inteiro.
-    Devolve (lista de registros do Contrato B, estatisticas de deteccao).
+    Devolve (lista de registros de estatisticas de deteccao).
     """
     import cv2
 

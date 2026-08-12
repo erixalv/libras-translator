@@ -1,7 +1,6 @@
 """
 Classificador LSTM bidirecional para landmarks de mao (LIBRAS)
-  - LSTM bidirecional, 2 camadas (arquitetura travada na Secao 3.5 do
-    CONTRATOS.md), hidden_size=48 e dropout mais forte -- reduzidos em
+  - LSTM bidirecional, 2 camadas, hidden_size=48 e dropout mais forte -- reduzidos em
     relacao ao hidden_size=128/dropout=0.3 originais depois de medir
     overfitting severo (~99% treino vs ~35-40% em sinalizador nunca visto,
     com apenas 12 sinalizadores distintos no dataset -- ver discussao do
@@ -14,7 +13,7 @@ Classificador LSTM bidirecional para landmarks de mao (LIBRAS)
     dos outros 29 frames, forcando a LSTM a "resumir tudo" numa unica saida
     final. Atencao deixa o modelo aprender qual(is) frame(s) do gesto
     pesam mais pra cada sinal, sem sair da familia LSTM (nao muda o nucleo
-    recorrente travado no CONTRATOS.md, so o jeito de ler a saida dele)
+    recorrente, so o jeito de ler a saida dele)
 """
 import torch
 import torch.nn as nn

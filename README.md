@@ -6,11 +6,11 @@ Sistema de tradução automática em tempo real de Língua Brasileira de Sinais 
 
 ## 📐 Arquitetura do Sistema
 
-O projeto é dividido em 5 módulos independentes baseados em contratos bem definidos (`CONTRATOS.md`):
+O projeto é dividido em 5 módulos independentes:
 
 1. **Captura (`src/captura/`)**: Leitura da webcam ou arquivos de vídeo (`OpenCV`), pré-processamento de iluminação (`CLAHE`) e segmentação de pele (`YCbCr`).
 2. **Landmarks (`src/landmarks/`)**: Extração de 260 landmarks corporais e das mãos (`MediaPipe Holistic`), normalização centrada nos ombros e vetorização.
-3. **Modelo DL (`src/modelo/`)**: Classificador temporal LSTM Bidirecional em `PyTorch` treinado em dataset final com 20 classes de sinais (MINDS-Libras).
+3. **Modelo DL (`src/modelo/`)**: Classificador temporal LSTM Bidirecional em `PyTorch` treinado em dataset final com 20 classes de sinais (MINDS-Libras + V-LIBRASIL + Gravações Próprias).
 4. **Linguagem (`src/linguagem/`)**: Módulo de NLP baseado em regras que converte sequências de glosas acumuladas em frases gramaticalmente corretas em português.
 5. **App & Interface (`src/app/`)**: Interface Web interativa em `Streamlit` com HUD/Overlay OpenCV desenhado no vídeo ao vivo e pipeline integrador.
 
@@ -55,7 +55,6 @@ pytest
 
 ```
 libras-translator/
-├── CONTRATOS.md               # Especificação técnica dos contratos entre módulos
 ├── vocabulario.json           # Lista oficial e origem dos 37 sinais do vocabulário
 ├── requirements.txt           # Dependências do projeto
 ├── data/

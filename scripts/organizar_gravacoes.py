@@ -8,7 +8,7 @@ Nome de arquivo original: "<SINAL_MAIUSCULO>_pessoa<X>_<NN>.mp4"
     ex: "OBRIGADO_pessoaC_04.mp4" -> sinal="OBRIGADO", pessoa="C", rep="04"
 
 O nome da pasta original (ex.: "OBRIGADO", "AGUA") usa a convencao do
-Contrato 0 (caixa alta, sem acento). Isso e traduzido para o nome EXATO
+(caixa alta, sem acento). Isso e traduzido para o nome EXATO
 que ja existe em data/raw/VLIBRASIL/ (ex.: "Obrigado", "Agua" -> "Água"),
 senao essas gravacoes viram uma classe DUPLICADA em vez de somar amostra
 as palavras que ja existem. EU e VOCE nao existem no V-LIBRASIL — viram

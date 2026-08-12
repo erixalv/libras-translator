@@ -23,7 +23,7 @@ from src.app.pipeline_integrador import PipelineIntegrador
 
 
 # ==============================================================================
-# TESTES DE MOCKS / STUBS (Contratos C e D)
+# TESTES DE MOCKS / STUBS 
 # ==============================================================================
 
 def test_carregar_vocabulario_mock():
@@ -35,7 +35,7 @@ def test_carregar_vocabulario_mock():
 
 
 def test_predict_mock_formato_contrato_c():
-    """Garante que o predict mock respeita rigorosamente a estrutura do Contrato C."""
+    """Garante que o predict mock respeita rigorosamente a estrutura."""
     res = predict_mock()
     assert isinstance(res, dict)
     assert "gloss" in res
@@ -48,7 +48,7 @@ def test_predict_mock_formato_contrato_c():
 
 
 def test_glosas_para_frase_mock_formato_contrato_d():
-    """Garante que o glosas_para_frase mock respeita a estrutura do Contrato D."""
+    """Garante que o glosas_para_frase mock respeita a estrutura."""
     glosas_entrada = ["EU", "QUERER", "AGUA"]
     res = glosas_para_frase_mock(glosas_entrada)
     assert isinstance(res, dict)

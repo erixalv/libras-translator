@@ -1,5 +1,5 @@
 """
-Normalização espacial e vetorização dos landmarks (Contrato B).
+Normalização espacial e vetorização dos landmarks.
 
 Layout do vetor de features (N_FEATURES = 260), ordem FIXA — combinar com a Pessoa 3:
 
@@ -67,7 +67,7 @@ def _centro_e_escala(pose: np.ndarray) -> tuple[np.ndarray, float]:
 
 def normalizar_registro(reg: dict) -> dict:
     """
-    Recebe 1 dict no formato bruto do Contrato B (coordenadas MediaPipe, 0..1)
+    Recebe 1 dict no formato bruto (coordenadas MediaPipe, 0..1)
     e devolve o mesmo dict com as coordenadas normalizadas em relacao ao
     centro dos ombros. Maos ausentes continuam None.
     """
@@ -105,7 +105,7 @@ def normalizar_registro(reg: dict) -> dict:
 # --------------------------------------------------------------------------
 
 def registro_para_vetor(reg: dict) -> np.ndarray:
-    """dict do Contrato B (ja normalizado) -> vetor (N_FEATURES,) float32."""
+    """dict (ja normalizado) -> vetor (N_FEATURES,) float32."""
     v = np.full(N_FEATURES, SENTINELA, dtype=np.float32)
 
     pose = np.asarray(reg["pose"], dtype=np.float32)
@@ -127,7 +127,7 @@ def registro_para_vetor(reg: dict) -> np.ndarray:
 
 def espelhar_vetor(v: np.ndarray) -> np.ndarray:
     """
-    Espelha lateralmente um vetor de features (Contrato B, N_FEATURES):
+    Espelha lateralmente um vetor de features (N_FEATURES):
     inverte o eixo x, troca os pares esquerda/direita da pose e troca os
     blocos de mao esquerda/direita (landmarks + mask).
 

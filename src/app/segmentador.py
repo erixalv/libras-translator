@@ -11,7 +11,7 @@ gesto), entao a maioria das previsoes ao vivo sai ruidosa mesmo em sinais
 bem representados no treino.
 
 SegmentadorSinal resolve isso detectando INICIO e FIM de cada sinal pela
-presenca de mao (mask_esq/mask_dir do Contrato B): a mao aparece -> comeca a
+presenca de mao: a mao aparece -> comeca a
 capturar; a mao some por `tempo_confirmacao_fim_seg` segundos seguidos -> o
 sinal acabou, devolve os frames daquele sinal prontos pra passar em
 construir_sequencia(..., modo="reamostrar") -- exatamente como no treino.

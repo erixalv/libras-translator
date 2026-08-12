@@ -1,8 +1,8 @@
 """
-Módulo Pipeline Integrador (Pessoa 5).
+Módulo Pipeline Integrador.
 Integra os 4 módulos do sistema (Captura, Landmarks, Modelo DL e Linguagem),
 segmentando sinais isolados do fluxo continuo (ver src/app/segmentador.py) e
-gerenciando o acúmulo de glosas (Contrato C.5).
+gerenciando o acúmulo de glosas.
 """
 
 import time
@@ -24,7 +24,7 @@ class PipelineIntegrador:
       - Modo Mock vs. Modo Real
       - Segmentação de sinais isolados por presença de mão (SegmentadorSinal,
         modo real) ou janela deslizante simulada (modo mock)
-      - Lógica de acúmulo de glosas e gatilhos de tradução (Contrato C.5)
+      - Lógica de acúmulo de glosas e gatilhos de tradução
       - Renderização de overlay no frame (OpenCV)
     """
 
@@ -41,8 +41,8 @@ class PipelineIntegrador:
         Args:
             modo_mock: Se True, usa stubs simulados. Se False, usa módulos reais.
             limiar_confianca: Confiança mínima (0.0 a 1.0) para aceitar uma glosa.
-            tamanho_janela: Quantidade de frames para a inferência DL (Contrato B: 30).
-            tempo_silencio_seg: Segundos sem nova glosa para disparar tradução (Contrato C.5).
+            tamanho_janela: Quantidade de frames para a inferência DL (30).
+            tempo_silencio_seg: Segundos sem nova glosa para disparar tradução.
             max_glosas_buffer: Máximo de glosas acumuladas antes de disparar tradução.
             mostrar_landmarks: Se True (modo real), desenha pose/mãos detectados no frame --
                 debug visual pra conferir se a mão está sendo captada.
@@ -136,7 +136,7 @@ class PipelineIntegrador:
              pra 30 frames, entao prever numa janela deslizante crua nao
              bate com isso.
           3. Executa o classificador DL quando ha um sinal pronto.
-          4. Aplica as regras de acúmulo de glosas (Contrato C.5).
+          4. Aplica as regras de acúmulo de glosas.
           5. Renderiza a legenda (overlay) no frame.
 
         Args:
@@ -189,7 +189,7 @@ class PipelineIntegrador:
                     self.top_k_atual = res_pred.get("top_k", [])
                     self._atualizar_acumulo_glosas(agora)
 
-        # 3. Checagem de tempo de silêncio (Gatilho b de Contrato C.5)
+        # 3. Checagem de tempo de silêncio 
         # Se passaram 2 segundos sem nova glosa e temos glosas no buffer, dispara tradução
         if self.buffer_glosas and (agora - self.tempo_ultima_glosa >= self.tempo_silencio_seg):
             self._disparar_traducao_frase()
@@ -218,7 +218,7 @@ class PipelineIntegrador:
 
     def _atualizar_acumulo_glosas(self, momento_atual: float) -> None:
         """
-        Aplica as regras do Contrato C.5 para acúmulo de glosas:
+        Aplica as regras para acúmulo de glosas:
           - Glosa != "NENHUM"
           - Confiança >= limiar
           - Glosa != última glosa aceita no buffer

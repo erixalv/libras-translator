@@ -14,7 +14,7 @@ DIR_PROCESSED = os.path.join(RAIZ, "data", "processed")
 CAMINHO_MODELO = os.path.join(DIR_PROCESSED, "modelo_melhor.pt")
 CAMINHO_SCALER = os.path.join(DIR_PROCESSED, "scaler.pkl")
 
-LIMIAR_CONFIANCA_PADRAO = 0.6  # o mesmo do Contrato C (CONTRATOS.md) -- ver _remapear_confianca()
+LIMIAR_CONFIANCA_PADRAO = 0.6  
 
 _vocabulario = carregar_vocabulario()
 _modelos = None
@@ -76,10 +76,10 @@ def _remapear_confianca(conf_bruta: float, limiar_classe: float, limiar_global: 
     Reescala a confianca bruta de UMA classe especifica de forma monotonica
     (preserva ordem) de modo que, no limiar_classe calibrado pra ela
     (calibrar_limiares_por_classe(), via curva precisao-recall no OOF do
-    CV), a confianca reescalada bata exatamente no limiar_global (0.6,
-    Contrato C). Efeito: aplicar o corte fixo de 0.6 por fora (como o app
+    CV), a confianca reescalada bata exatamente no limiar_global (0.6).
+    Efeito: aplicar o corte fixo de 0.6 por fora (como o app
     ja faz hoje, PipelineIntegrador.limiar_confianca) passa a se comportar
-    como um limiar calibrado por classe, sem mudar o Contrato C nem a UI.
+    como um limiar calibrado por classe, sem mudar a UI.
     """
     if not (0.0 < limiar_classe < 1.0):
         return conf_bruta

@@ -1,7 +1,7 @@
 """
 Processa o MINDS-Libras direto do .zip baixado (scripts/baixar_minds_raw.py),
 sem nunca extrair tudo de uma vez: pra cada video dentro do zip, extrai SO
-ele pra um arquivo temporario, roda o pipeline de landmarks (Contrato B),
+ele pra um arquivo temporario, roda o pipeline de landmarks,
 salva o vetor (30, 260) resultante num cache proprio, e apaga o video
 temporario antes de passar pro proximo.
 

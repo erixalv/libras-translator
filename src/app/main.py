@@ -138,7 +138,7 @@ def main():
         max_value=1.0,
         value=0.60,
         step=0.05,
-        help="Glosas com confiança abaixo deste valor são descartadas (Contrato C)."
+        help="Glosas com confiança abaixo deste valor são descartadas."
     )
 
     # 4. Botão de Reset

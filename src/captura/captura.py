@@ -15,7 +15,7 @@ def capturar_frames(fonte: str | int = 0) -> Iterator[np.ndarray]:
     """
     cap = cv2.VideoCapture(fonte)
     
-    # Força a resolução estipulada no contrato
+    # Força a resolução
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     cap.set(cv2.CAP_PROP_FPS, 30)

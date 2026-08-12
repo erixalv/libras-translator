@@ -34,7 +34,7 @@ N_FOLDS_CV = 8  # leave-one-signer-out: com so 8 sinalizadores de treino (vocabu
                 # dado por fold (7/8) e da 8 modelos no ensemble em vez de 4 (mais
                 # diversidade, ver discussao do "efeito ima" em sequencias ambiguas)
 GRAD_CLIP_NORM = 5.0
-LIMIAR_CONFIANCA_PADRAO = 0.6  # mesmo valor travado no Contrato C (CONTRATOS.md); usado
+LIMIAR_CONFIANCA_PADRAO = 0.6  # mesmo valor travado; usado
                                 # como fallback do limiar por classe quando faltar dado OOF
 
 # defaults de producao -- mude aqui pra ligar/desligar as features novas
@@ -274,7 +274,7 @@ def calibrar_temperatura(logits_oof: torch.Tensor, y_oof: torch.Tensor) -> float
     Motivacao: medimos que uma sequencia TODA ZERO (sem gesto nenhum)
     tirava 0.32 de confianca do ensemble numa classe especifica -- ou
     seja, o modelo pode estar confiante e errado, o que faz o limiar de
-    confianca do Contrato C (0.6) filtrar menos do que deveria.
+    confianca filtrar menos do que deveria.
     """
     log_T = torch.zeros(1, requires_grad=True)
     otimizador = torch.optim.LBFGS([log_T], lr=0.01, max_iter=200)
@@ -299,7 +299,7 @@ def calibrar_limiares_por_classe(
     min_amostras_positivas: int = 5,
 ) -> dict[str, float]:
     """
-    Um limiar de confianca global unico (0.6 pra todo mundo, Contrato C) e
+    Um limiar de confianca global unico (0.6 pra todo mundo) e
     grosseiro: classes faceis (ex. Esquina, Vacina) e dificeis (ex. Bala,
     Conhecer) tem calibracao bem diferente. Aqui, pra cada classe, acha o
     ponto de corte que maximiza F1 (curva precisao-recall, one-vs-rest) nos
@@ -307,7 +307,7 @@ def calibrar_limiares_por_classe(
     (< min_amostras_positivas) caem no limiar_padrao, porque nao ha dado
     suficiente pra calibrar algo especifico com confianca.
 
-    O resultado NAO muda o Contrato C (predict() continua com 1 numero de
+    O resultado NAO muda, (predict() continua com 1 numero de
     confianca e o app continua com 1 limiar global na barra lateral) --
     predict() usa esses limiares por classe so pra REESCALAR a confianca
     devolvida, de um jeito que aplicar o limiar global de 0.6 por fora
@@ -353,7 +353,7 @@ def salvar_ensemble(
     avaliacao.py carregam isso e fazem a media do softmax calibrado dos N
     modelos (ver avaliar_ensemble()).
 
-    Formato interno, nao afeta o Contrato C (predict() continua devolvendo
+    Formato interno, nao afeta (predict() continua devolvendo
     o mesmo dict) -- so muda o que tem dentro de modelo_melhor.pt/scaler.pkl.
     """
     n_features = modelos_e_scalers[0][0].lstm.input_size

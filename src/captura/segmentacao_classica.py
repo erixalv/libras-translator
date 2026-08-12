@@ -5,7 +5,6 @@ def segmentar_pele_ycbcr(frame: np.ndarray) -> np.ndarray:
     """Segmenta a pele no espaço YCbCr seguindo faixas fixas."""
     ycbcr = cv2.cvtColor(frame, cv2.COLOR_BGR2YCrCb)
     
-    # Faixas definidas no contrato (Cr em [135,180], Cb em [85,135])
     lower = np.array([0, 135, 85], dtype=np.uint8)
     upper = np.array([255, 180, 135], dtype=np.uint8)
     
