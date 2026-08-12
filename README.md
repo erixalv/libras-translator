@@ -10,7 +10,7 @@ O projeto é dividido em 5 módulos independentes baseados em contratos bem defi
 
 1. **Captura (`src/captura/`)**: Leitura da webcam ou arquivos de vídeo (`OpenCV`), pré-processamento de iluminação (`CLAHE`) e segmentação de pele (`YCbCr`).
 2. **Landmarks (`src/landmarks/`)**: Extração de 260 landmarks corporais e das mãos (`MediaPipe Holistic`), normalização centrada nos ombros e vetorização.
-3. **Modelo DL (`src/modelo/`)**: Classificador temporal LSTM Bidirecional em `PyTorch` treinado em dataset final com 37 classes de sinais (MINDS-Libras + V-LIBRASIL + Gravações Próprias).
+3. **Modelo DL (`src/modelo/`)**: Classificador temporal LSTM Bidirecional em `PyTorch` treinado em dataset final com 20 classes de sinais (MINDS-Libras).
 4. **Linguagem (`src/linguagem/`)**: Módulo de NLP baseado em regras que converte sequências de glosas acumuladas em frases gramaticalmente corretas em português.
 5. **App & Interface (`src/app/`)**: Interface Web interativa em `Streamlit` com HUD/Overlay OpenCV desenhado no vídeo ao vivo e pipeline integrador.
 
@@ -19,6 +19,7 @@ O projeto é dividido em 5 módulos independentes baseados em contratos bem defi
 ## 🛠️ Instalação e Requisitos
 
 ### Pré-requisitos
+
 - Python 3.10+ (suporta Windows, Linux e macOS)
 - Webcam para captura em tempo real (opcional: aceita arquivos `.mp4`)
 
