@@ -8,6 +8,10 @@ __pycache__/
 data/raw/
 data/processed/cache/
 data/processed/cache_minds/
+# datasets intermediarios por fonte (117MB/17MB) -- passam do limite de 100MB
+# do GitHub; ja combinados dentro de dataset_final.npz, que e o versionado
+data/processed/dataset_vlibrasil.npz
+data/processed/dataset_minds.npz
 
 videos UFPE (V-LIBRASIL)/
 treino/

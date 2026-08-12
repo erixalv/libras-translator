@@ -7,7 +7,7 @@ import os
 import numpy as np
 
 N_FRAMES = 30
-N_FEATURES = 258  # 33*4 (pose) + 21*3*2 (maos) -- ver CONTRATOS.md, Contrato B
+N_FEATURES = 260  # 33*4 (pose) + 21*3*2 (maos) + 2 (mascaras) -- ver normalizacao.py e CONTRATOS.md
 AMOSTRAS_POR_CLASSE = 40
 SEED = 42
 

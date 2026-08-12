@@ -65,6 +65,25 @@ def espelhar_sequencias(X: np.ndarray) -> np.ndarray:
     return espelhado
 
 
+def adicionar_features_velocidade(X: np.ndarray) -> np.ndarray:
+    """
+    Concatena a diferenca frame-a-frame (velocidade) as features de posicao,
+    dobrando N_FEATURES (260 -> 520). Libras e sobre MOVIMENTO, nao pose
+    estatica -- hoje o modelo so ve posicao em cada frame e tem que inferir
+    velocidade/direcao indiretamente através da LSTM; dar isso explicito
+    como feature ajuda o modelo a distinguir sinais que so diferem na
+    dinamica do gesto.
+
+    Funciona tanto pra 1 sequencia (T, F) quanto pra um lote (N, T, F).
+    Primeiro frame nao tem frame anterior -- velocidade fica 0 ali.
+    Precisa ser chamado ANTES do StandardScaler, na mesma ordem de
+    grandeza das coordenadas normalizadas cruas.
+    """
+    velocidade = np.zeros_like(X)
+    velocidade[..., 1:, :] = X[..., 1:, :] - X[..., :-1, :]
+    return np.concatenate([X, velocidade], axis=-1)
+
+
 def _augmentar_sequencia(x: np.ndarray, ruido_std: float = 0.01, prob_mascara: float = 0.1) -> np.ndarray:
     """Augmentation leve para sequencias de landmarks, aplicada so no treino:
     - ruido gaussiano pequeno em cada coordenada (simula jitter de deteccao)

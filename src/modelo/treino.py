@@ -1,21 +1,30 @@
 """
-Loop de treino (v6)
+Loop de treino (v8)
 
 Com so 12 sinalizadores distintos no dataset, uma unica divisao
 treino/validacao e loteria: rodando o mesmo treino com o holdout de
 validacao trocado, a acc final variou de 11% a 47% (ver historico do
 projeto). Por isso o fluxo aqui e em duas etapas:
 
-  1. validar_cruzado(): GroupKFold por sinalizador (~3 de fora por fold).
-     Cada fold treina do zero e mede acc no holdout -- a media +- desvio
-     entre folds e a estimativa CONFIAVEL de generalizacao pra reportar.
-     Tambem devolve a mediana da "melhor epoca" entre os folds.
-  2. treinar_epocas_fixas(): treino final de producao, com TODOS os 12
-     sinalizadores de treino (sem separar validacao -- pouca gente pra
-     desperdicar em early stopping), por esse numero fixo de epocas.
+  1. validar_cruzado(devolver_modelos=True): GroupKFold por sinalizador
+     (leave-one-signer-out, 1 de fora por fold -- ver N_FOLDS_CV). Cada
+     fold treina do zero e mede acc no holdout
+     -- a media +- desvio entre folds e a estimativa CONFIAVEL de
+     generalizacao pra reportar. Os 4 modelos treinados (cada um viu um
+     recorte diferente de sinalizadores) sao mantidos em vez de
+     descartados.
+  2. salvar_ensemble(): esses 4 modelos + scalers SAO a producao -- em vez
+     de treinar um 5o modelo do zero com 100% do treino (como era antes,
+     ver historico do projeto), a predicao final usa a MEDIA do softmax
+     dos 4 (ver avaliar_ensemble()). Testado no holdout real: 48.4% de
+     acuracia com o ensemble vs 40.8% do modelo unico anterior, mesma
+     arquitetura -- ganho de graca, sem dado novo, so parar de jogar fora
+     os modelos que o CV ja treina. Elimina tambem a necessidade de
+     escolher um numero fixo de epocas via mediana do CV: cada modelo do
+     ensemble ja usa seu proprio checkpoint de early stopping.
 
 O conjunto de teste (X_test/y_test, holdout de sinalizador desconhecido,
-nunca usado no CV nem no treino final) e avaliado UMA UNICA VEZ, no fim.
+nunca usado no CV) e avaliado UMA UNICA VEZ, no fim, com avaliar_ensemble().
 
 Outros pontos:
   - augmentation com espelhamento lateral (robustez a mao dominante),
@@ -25,7 +34,20 @@ Outros pontos:
     arquiteturas.py: com hidden_size=128/weight_decay=1e-5 originais o
     modelo memorizava o treino (~99%) e generalizava mal (~35-40% em
     sinalizador novo, 804k parametros para 12 pessoas)
-  - gradient clipping e class weights
+  - balanceamento por CLASSE (class_weight balanceado, via CrossEntropyLoss).
+    Tentamos balancear por SINALIZADOR INDIVIDUAL tambem (pra corrigir
+    classes que misturam 20 amostras de gravacao propria com so 2 do
+    V-LIBRASIL) via WeightedRandomSampler, mas empiricamente NAO ajudou o
+    V-LIBRASIL (ficou identico, 4.5%) e piorou a gravacao propria (20% ->
+    9%) -- reponderar so redistribui atencao entre dado que ja existe, nao
+    cria dado novo, e com so 2 amostras de V-LIBRASIL por classe nao tem
+    "atencao extra" que resolva isso. Revertido (ver historico do projeto).
+  - features de velocidade (adicionar_features_velocidade em dataset.py,
+    liga/desliga com USAR_VELOCIDADE) e leitura por atencao em vez de
+    ultimo estado oculto (ClassificadorLSTM(usar_atencao=...), ver
+    arquiteturas.py) -- duas mudancas independentes, testadas via CV antes
+    de virar padrao de producao
+  - gradient clipping
 
 Hiperparametros de loss/otimizador/batch continuam os da Secao 3.5 do
 CONTRATOS.md (CrossEntropyLoss, Adam, batch=16, ate 100 epocas, paciencia
@@ -45,7 +67,12 @@ from sklearn.model_selection import GroupKFold
 from torch.utils.data import DataLoader
 
 from src.modelo.arquiteturas import ClassificadorLSTM
-from src.modelo.dataset import LibrasLandmarksDataset, carregar_npz, espelhar_sequencias
+from src.modelo.dataset import (
+    LibrasLandmarksDataset,
+    adicionar_features_velocidade,
+    carregar_npz,
+    espelhar_sequencias,
+)
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DIR_SAIDA = os.path.join(RAIZ, "data", "processed")
@@ -55,8 +82,17 @@ WEIGHT_DECAY = 1e-4
 BATCH_SIZE = 16
 MAX_EPOCAS = 100
 PACIENCIA = 10
-N_FOLDS_CV = 4  # com 12 sinalizadores, ~3 por fold
+N_FOLDS_CV = 8  # leave-one-signer-out: com so 8 sinalizadores de treino (vocabulario
+                # reduzido a MINDS/V-LIBRASIL), cada fold deixa so 1 de fora -- maximiza
+                # dado por fold (7/8) e da 8 modelos no ensemble em vez de 4 (mais
+                # diversidade, ver discussao do "efeito ima" em sequencias ambiguas)
 GRAD_CLIP_NORM = 5.0
+LIMIAR_CONFIANCA_PADRAO = 0.6  # mesmo valor travado no Contrato C (CONTRATOS.md); usado
+                                # como fallback do limiar por classe quando faltar dado OOF
+
+# defaults de producao -- mude aqui pra ligar/desligar as features novas
+USAR_VELOCIDADE = True
+USAR_ATENCAO = True
 
 
 def _pesos_classe_balanceados(y: np.ndarray, n_classes: int) -> torch.Tensor:
@@ -72,12 +108,15 @@ def _pesos_classe_balanceados(y: np.ndarray, n_classes: int) -> torch.Tensor:
     return torch.tensor(pesos, dtype=torch.float32)
 
 
-def _preparar_treino(X_train: np.ndarray, y_train: np.ndarray, n_classes: int):
-    """Espelha (dobra) o treino e monta o Dataset + pesos de classe -- comum
-    tanto ao treino com early stopping quanto ao treino final de epocas fixas."""
+def _preparar_treino(X_train: np.ndarray, y_train: np.ndarray, n_classes: int, usar_velocidade: bool):
+    """Espelha (dobra) o treino, adiciona features de velocidade (opcional) e
+    monta o Dataset + pesos de classe -- comum tanto ao treino com early
+    stopping quanto ao treino final de epocas fixas."""
     X_train_esp = espelhar_sequencias(X_train)
     X_train_total = np.concatenate([X_train, X_train_esp])
     y_train_total = np.concatenate([y_train, y_train])
+    if usar_velocidade:
+        X_train_total = adicionar_features_velocidade(X_train_total)
     ds_treino = LibrasLandmarksDataset(X_train_total, y_train_total, fit_scaler=True, augment=True)
     pesos_classe = _pesos_classe_balanceados(y_train_total, n_classes)
     return ds_treino, pesos_classe
@@ -91,24 +130,26 @@ def _treinar_um_modelo(
     n_classes: int,
     dispositivo,
     verbose: bool = True,
-) -> tuple[float, int, "ClassificadorLSTM"]:
+    usar_velocidade: bool = USAR_VELOCIDADE,
+    usar_atencao: bool = USAR_ATENCAO,
+) -> tuple[float, int, "ClassificadorLSTM", object]:
     """
     Treina 1 modelo do zero com early stopping em (X_val, y_val). Devolve
-    (melhor_acc_val, melhor_epoca, modelo com os melhores pesos carregados).
+    (melhor_acc_val, melhor_epoca, modelo com os melhores pesos carregados, scaler).
 
-    Usado dentro do CV (pra medir generalizacao) -- o treino final de
-    producao NAO usa esta funcao, usa treinar_epocas_fixas (ver abaixo),
-    porque um unico split treino/validacao com so 12 sinalizadores se
-    mostrou instavel demais pra escolher o checkpoint final (ver historico).
+    Usada dentro do CV (pra medir generalizacao) -- os proprios modelos
+    treinados aqui, um por fold, viram a producao (ensemble, ver
+    salvar_ensemble() e avaliar_ensemble() em treinar()).
     """
-    ds_treino, pesos_classe = _preparar_treino(X_train, y_train, n_classes)
-    ds_val = LibrasLandmarksDataset(X_val, y_val, scaler=ds_treino.scaler, fit_scaler=False, augment=False)
+    ds_treino, pesos_classe = _preparar_treino(X_train, y_train, n_classes, usar_velocidade)
+    X_val_prep = adicionar_features_velocidade(X_val) if usar_velocidade else X_val
+    ds_val = LibrasLandmarksDataset(X_val_prep, y_val, scaler=ds_treino.scaler, fit_scaler=False, augment=False)
 
     dl_treino = DataLoader(ds_treino, batch_size=BATCH_SIZE, shuffle=True)
     dl_val = DataLoader(ds_val, batch_size=BATCH_SIZE, shuffle=False)
 
-    n_features = X_train.shape[-1]
-    modelo = ClassificadorLSTM(n_features=n_features, n_classes=n_classes).to(dispositivo)
+    n_features = ds_treino.X.shape[-1]
+    modelo = ClassificadorLSTM(n_features=n_features, n_classes=n_classes, usar_atencao=usar_atencao).to(dispositivo)
     otimizador = torch.optim.Adam(modelo.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     criterio = nn.CrossEntropyLoss(weight=pesos_classe.to(dispositivo))
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(otimizador, mode="max", factor=0.5, patience=4)
@@ -151,10 +192,35 @@ def _treinar_um_modelo(
                 break
 
     modelo.load_state_dict(melhor_state_dict)
-    return melhor_acc_val, melhor_epoca, modelo
+    return melhor_acc_val, melhor_epoca, modelo, ds_treino.scaler
 
 
-def validar_cruzado(X_train_full, y_train_full, sinalizadores_train_full, n_classes, dispositivo) -> int | None:
+def _logits_validacao(modelo, scaler, X_val, y_val, dispositivo, usar_velocidade):
+    """Logits crus (pre-softmax) do modelo no seu proprio holdout do fold --
+    usados pra calibracao (temperature scaling / limiar por classe), nunca
+    pra decidir a predicao em si."""
+    X_prep = adicionar_features_velocidade(X_val) if usar_velocidade else X_val
+    ds = LibrasLandmarksDataset(X_prep, y_val, scaler=scaler, fit_scaler=False, augment=False)
+    dl = DataLoader(ds, batch_size=BATCH_SIZE, shuffle=False)
+    modelo.eval()
+    logits_todos, y_todos = [], []
+    with torch.no_grad():
+        for x, y in dl:
+            logits_todos.append(modelo(x.to(dispositivo)).cpu())
+            y_todos.append(y)
+    return torch.cat(logits_todos), torch.cat(y_todos)
+
+
+def validar_cruzado(
+    X_train_full,
+    y_train_full,
+    sinalizadores_train_full,
+    n_classes,
+    dispositivo,
+    usar_velocidade: bool = USAR_VELOCIDADE,
+    usar_atencao: bool = USAR_ATENCAO,
+    devolver_modelos: bool = False,
+):
     """
     GroupKFold por sinalizador: cada fold treina do zero com ~3 sinalizadores
     de fora, e mede a acc nesse holdout. A media +- desvio entre folds e uma
@@ -162,23 +228,34 @@ def validar_cruzado(X_train_full, y_train_full, sinalizadores_train_full, n_clas
     treino/validacao -- com so 12 pessoas no dataset, uma unica divisao
     depende demais de sorte de quem caiu no holdout.
 
-    Devolve a mediana da "melhor epoca" entre os folds -- usada como numero
-    fixo de epocas pro treino final com 100% do treino (ver treinar_epocas_fixas).
+    Devolve (epoca_final, modelos_e_scalers, oof) -- epoca_final e so a
+    mediana da "melhor epoca" entre os folds, reportada pra referencia (nao
+    ha mais um treino final separado que a use, ver docstring do modulo);
+    modelos_e_scalers e None a menos que devolver_modelos=True, caso em que
+    e a lista [(modelo, scaler), ...] dos N modelos do CV, prontos pra
+    ensemble (ver avaliar_ensemble() e salvar_ensemble()); oof e None a
+    menos que devolver_modelos=True, caso em que e (logits_oof, y_oof) --
+    os logits de CADA amostra de treino, previstos pelo modelo do fold em
+    que ela ficou de fora (sem vazamento: nenhum modelo ve a propria
+    amostra que esta prevendo). Usado pra calibrar temperatura e limiar por
+    classe (ver calibrar_temperatura() e calibrar_limiares_por_classe()).
     """
     if sinalizadores_train_full is None:
         print("AVISO: sem sinalizadores_train -- pulando validacao cruzada.")
-        return None
+        return None, None, None
 
     grupos = np.asarray(sinalizadores_train_full)
     n_grupos = len(set(grupos.tolist()))
     n_folds = min(N_FOLDS_CV, n_grupos)
 
-    print(f"\n=== Validacao cruzada por sinalizador ({n_folds} folds, {n_grupos} sinalizadores) ===")
+    print(f"\n=== Validacao cruzada por sinalizador ({n_folds} folds, {n_grupos} sinalizadores, "
+          f"velocidade={usar_velocidade}, atencao={usar_atencao}) ===")
     gkf = GroupKFold(n_splits=n_folds)
-    accs, epocas = [], []
+    accs, epocas, modelos_e_scalers = [], [], []
+    logits_oof_lista, y_oof_lista = [], []
     for i, (idx_treino, idx_val) in enumerate(gkf.split(X_train_full, y_train_full, groups=grupos), start=1):
         sinalizadores_fold_val = sorted(set(grupos[idx_val].tolist()))
-        acc_val, melhor_epoca, _ = _treinar_um_modelo(
+        acc_val, melhor_epoca, modelo, scaler = _treinar_um_modelo(
             X_train_full[idx_treino],
             y_train_full[idx_treino],
             X_train_full[idx_val],
@@ -186,59 +263,167 @@ def validar_cruzado(X_train_full, y_train_full, sinalizadores_train_full, n_clas
             n_classes,
             dispositivo,
             verbose=False,
+            usar_velocidade=usar_velocidade,
+            usar_atencao=usar_atencao,
         )
         print(f"  fold {i}/{n_folds} (holdout={sinalizadores_fold_val}): acc_val={acc_val:.4f} (melhor epoca={melhor_epoca})")
         accs.append(acc_val)
         epocas.append(melhor_epoca)
+        if devolver_modelos:
+            modelos_e_scalers.append((modelo, scaler))
+            logits_fold, y_fold = _logits_validacao(
+                modelo, scaler, X_train_full[idx_val], y_train_full[idx_val], dispositivo, usar_velocidade
+            )
+            logits_oof_lista.append(logits_fold)
+            y_oof_lista.append(y_fold)
 
     print(f"Validacao cruzada: {np.mean(accs):.4f} +- {np.std(accs):.4f}  (folds: {[round(a, 4) for a in accs]})")
     epoca_final = int(np.median(epocas))
     print(f"Mediana da melhor epoca entre os folds: {epoca_final} (epocas por fold: {epocas})")
-    return epoca_final
+
+    oof = (torch.cat(logits_oof_lista), torch.cat(y_oof_lista)) if devolver_modelos else None
+    return epoca_final, (modelos_e_scalers if devolver_modelos else None), oof
 
 
-def treinar_epocas_fixas(
-    X_train_full, y_train_full, n_classes, dispositivo, n_epocas: int, salvar_em: str, classes: list[str]
-) -> "ClassificadorLSTM":
+def avaliar_ensemble(
+    modelos_e_scalers: list,
+    X_test: np.ndarray,
+    y_test: np.ndarray,
+    dispositivo,
+    temperatura: float = 1.0,
+    usar_velocidade: bool = USAR_VELOCIDADE,
+) -> float:
     """
-    Treino final de producao: usa TODOS os sinalizadores de treino (sem
-    separar validacao) por um numero FIXO de epocas -- vindo da mediana do
-    CV. Sem validacao pra fazer early stopping por dois motivos: (1) toda
-    pessoa disponivel deveria ir pro treino, ja que sao so 12 no total, e
-    (2) o CV ja mostrou que escolher o checkpoint via um unico split
-    pequeno de validacao e instavel demais pra confiar (ver historico).
+    Media do softmax (calibrado por temperatura, ver calibrar_temperatura())
+    dos modelos do CV (cada um viu N-1 dos N sinalizadores, combinacoes
+    diferentes) -- reduz a variancia de um unico modelo, sem precisar de
+    dado novo: e so aproveitar o que o CV ja treinou.
     """
-    ds_treino, pesos_classe = _preparar_treino(X_train_full, y_train_full, n_classes)
-    dl_treino = DataLoader(ds_treino, batch_size=BATCH_SIZE, shuffle=True)
+    X_prep = adicionar_features_velocidade(X_test) if usar_velocidade else X_test
+    probs_por_modelo = []
+    for modelo, scaler in modelos_e_scalers:
+        ds = LibrasLandmarksDataset(X_prep, y_test, scaler=scaler, fit_scaler=False, augment=False)
+        dl = DataLoader(ds, batch_size=BATCH_SIZE, shuffle=False)
+        modelo.eval()
+        probs_modelo = []
+        with torch.no_grad():
+            for x, _ in dl:
+                x = x.to(dispositivo)
+                probs_modelo.append(torch.softmax(modelo(x) / temperatura, dim=1).cpu())
+        probs_por_modelo.append(torch.cat(probs_modelo))
 
-    n_features = X_train_full.shape[-1]
-    modelo = ClassificadorLSTM(n_features=n_features, n_classes=n_classes).to(dispositivo)
-    otimizador = torch.optim.Adam(modelo.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-    criterio = nn.CrossEntropyLoss(weight=pesos_classe.to(dispositivo))
+    probs_media = torch.stack(probs_por_modelo).mean(dim=0)
+    preds = probs_media.argmax(dim=1).numpy()
+    return float((preds == y_test).mean())
 
-    modelo.train()
-    for epoca in range(1, n_epocas + 1):
-        perda_total = 0.0
-        for x, y in dl_treino:
-            x, y = x.to(dispositivo), y.to(dispositivo)
-            otimizador.zero_grad()
-            logits = modelo(x)
-            perda = criterio(logits, y)
-            perda.backward()
-            torch.nn.utils.clip_grad_norm_(modelo.parameters(), GRAD_CLIP_NORM)
-            otimizador.step()
-            perda_total += perda.item() * x.size(0)
-        perda_media = perda_total / len(ds_treino)
-        print(f"  Epoca {epoca:03d}/{n_epocas} | perda_treino={perda_media:.4f}")
 
+def calibrar_temperatura(logits_oof: torch.Tensor, y_oof: torch.Tensor) -> float:
+    """
+    Temperature scaling (Guo et al. 2017): ajusta 1 escalar T que minimiza
+    o NLL de softmax(logits/T) nos logits OOF do CV. So reescala o quao
+    "afiada" e a distribuicao de cada modelo -- nao muda o argmax de
+    ninguem, so faz a confianca refletir melhor a chance real de acerto.
+
+    Motivacao: medimos que uma sequencia TODA ZERO (sem gesto nenhum)
+    tirava 0.32 de confianca do ensemble numa classe especifica -- ou
+    seja, o modelo pode estar confiante e errado, o que faz o limiar de
+    confianca do Contrato C (0.6) filtrar menos do que deveria.
+    """
+    log_T = torch.zeros(1, requires_grad=True)
+    otimizador = torch.optim.LBFGS([log_T], lr=0.01, max_iter=200)
+    criterio = nn.CrossEntropyLoss()
+
+    def _fechar():
+        otimizador.zero_grad()
+        T = log_T.exp()
+        perda = criterio(logits_oof / T, y_oof)
+        perda.backward()
+        return perda
+
+    otimizador.step(_fechar)
+    return float(log_T.exp().item())
+
+
+def calibrar_limiares_por_classe(
+    probs_oof: torch.Tensor,
+    y_oof: torch.Tensor,
+    classes: list[str],
+    limiar_padrao: float = LIMIAR_CONFIANCA_PADRAO,
+    min_amostras_positivas: int = 5,
+) -> dict[str, float]:
+    """
+    Um limiar de confianca global unico (0.6 pra todo mundo, Contrato C) e
+    grosseiro: classes faceis (ex. Esquina, Vacina) e dificeis (ex. Bala,
+    Conhecer) tem calibracao bem diferente. Aqui, pra cada classe, acha o
+    ponto de corte que maximiza F1 (curva precisao-recall, one-vs-rest) nos
+    dados OOF do CV -- classes com poucas amostras positivas no OOF
+    (< min_amostras_positivas) caem no limiar_padrao, porque nao ha dado
+    suficiente pra calibrar algo especifico com confianca.
+
+    O resultado NAO muda o Contrato C (predict() continua com 1 numero de
+    confianca e o app continua com 1 limiar global na barra lateral) --
+    predict() usa esses limiares por classe so pra REESCALAR a confianca
+    devolvida, de um jeito que aplicar o limiar global de 0.6 por fora
+    tenha o mesmo efeito que aplicar o limiar certo de cada classe por
+    dentro (ver _remapear_confianca() em inferencia.py).
+    """
+    from sklearn.metrics import precision_recall_curve
+
+    y_np = y_oof.numpy()
+    probs_np = probs_oof.numpy()
+    limiares = {}
+    for i, nome in enumerate(classes):
+        y_bin = (y_np == i).astype(int)
+        if y_bin.sum() < min_amostras_positivas:
+            limiares[nome] = limiar_padrao
+            continue
+        precisao, recall, cortes = precision_recall_curve(y_bin, probs_np[:, i])
+        f1 = np.divide(
+            2 * precisao * recall, precisao + recall, out=np.zeros_like(precisao), where=(precisao + recall) > 0
+        )
+        if len(cortes) == 0:
+            limiares[nome] = limiar_padrao
+            continue
+        melhor_idx = int(np.argmax(f1[:-1]))  # f1 tem 1 elemento a mais que cortes
+        limiares[nome] = float(np.clip(cortes[melhor_idx], 0.35, 0.85))
+    return limiares
+
+
+def salvar_ensemble(
+    modelos_e_scalers: list,
+    salvar_em: str,
+    classes: list[str],
+    temperatura: float = 1.0,
+    limiares_por_classe: dict[str, float] | None = None,
+    usar_velocidade: bool = USAR_VELOCIDADE,
+    usar_atencao: bool = USAR_ATENCAO,
+) -> None:
+    """
+    Salva os N modelos do CV (e seus scalers) como o artefato de producao
+    -- um unico arquivo com uma LISTA de state_dicts em vez de um
+    state_dict so, mais a temperatura (calibrar_temperatura()) e os
+    limiares por classe (calibrar_limiares_por_classe()). inferencia.py e
+    avaliacao.py carregam isso e fazem a media do softmax calibrado dos N
+    modelos (ver avaliar_ensemble()).
+
+    Formato interno, nao afeta o Contrato C (predict() continua devolvendo
+    o mesmo dict) -- so muda o que tem dentro de modelo_melhor.pt/scaler.pkl.
+    """
+    n_features = modelos_e_scalers[0][0].lstm.input_size
     torch.save(
-        {"state_dict": modelo.state_dict(), "n_features": n_features, "vocabulario": classes},
+        {
+            "state_dicts": [modelo.state_dict() for modelo, _ in modelos_e_scalers],
+            "n_features": n_features,
+            "vocabulario": classes,
+            "usar_velocidade": usar_velocidade,
+            "usar_atencao": usar_atencao,
+            "temperatura": temperatura,
+            "limiares_por_classe": limiares_por_classe or {},
+        },
         os.path.join(salvar_em, "modelo_melhor.pt"),
     )
     with open(os.path.join(salvar_em, "scaler.pkl"), "wb") as f:
-        pickle.dump(ds_treino.scaler, f)
-
-    return modelo
+        pickle.dump([scaler for _, scaler in modelos_e_scalers], f)
 
 
 def treinar() -> None:
@@ -253,25 +438,29 @@ def treinar() -> None:
     X_train_full, y_train_full = dados["X_train"], dados["y_train"]
     sinalizadores_train_full = dados.get("sinalizadores_train")
 
-    epoca_final = validar_cruzado(X_train_full, y_train_full, sinalizadores_train_full, len(classes), dispositivo)
-    if epoca_final is None:
-        epoca_final = MAX_EPOCAS // 2  # fallback sem sinalizador pra guiar o CV
-
-    print(f"\n=== Treino final (producao, 100% do treino, {epoca_final} epocas) ===")
-    print(f"Treino: {len(y_train_full)} (x2 com espelhamento) | Teste (holdout): {len(dados['y_test'])}")
-
-    modelo = treinar_epocas_fixas(
-        X_train_full, y_train_full, len(classes), dispositivo, epoca_final, DIR_SAIDA, classes
+    _, modelos_e_scalers, oof = validar_cruzado(
+        X_train_full, y_train_full, sinalizadores_train_full, len(classes), dispositivo, devolver_modelos=True
     )
+    if not modelos_e_scalers:
+        raise RuntimeError("CV nao devolveu modelos (sem sinalizadores_train?) -- nao ha ensemble pra salvar.")
 
-    with open(os.path.join(DIR_SAIDA, "scaler.pkl"), "rb") as f:
-        scaler = pickle.load(f)
+    print(f"\n=== Producao: ensemble dos {len(modelos_e_scalers)} modelos do CV ===")
+    print(f"Treino: {len(y_train_full)} (x2 com espelhamento, por fold) | Teste (holdout): {len(dados['y_test'])}")
+
+    logits_oof, y_oof = oof
+    temperatura = calibrar_temperatura(logits_oof, y_oof)
+    probs_oof = torch.softmax(logits_oof / temperatura, dim=1)
+    limiares_por_classe = calibrar_limiares_por_classe(probs_oof, y_oof, classes)
+    print(f"Temperatura calibrada (OOF do CV): {temperatura:.3f}")
+    print("Limiares por classe (OOF do CV, fallback=padrao quando pouco dado):")
+    for nome, limiar in limiares_por_classe.items():
+        print(f"  {nome:12s} {limiar:.3f}")
+
+    salvar_ensemble(modelos_e_scalers, DIR_SAIDA, classes, temperatura=temperatura, limiares_por_classe=limiares_por_classe)
 
     # teste final -- usado UMA UNICA VEZ, so para reportar o numero real
-    ds_teste = LibrasLandmarksDataset(dados["X_test"], dados["y_test"], scaler=scaler, fit_scaler=False, augment=False)
-    dl_teste = DataLoader(ds_teste, batch_size=BATCH_SIZE, shuffle=False)
-    acc_teste = avaliar_rapido(modelo, dl_teste, dispositivo)
-    print(f"Acuracia final no TESTE (holdout de sinalizador desconhecido) = {acc_teste:.4f}")
+    acc_teste = avaliar_ensemble(modelos_e_scalers, dados["X_test"], dados["y_test"], dispositivo, temperatura=temperatura)
+    print(f"Acuracia final do ENSEMBLE no TESTE (holdout de sinalizador desconhecido) = {acc_teste:.4f}")
 
 
 def avaliar_rapido(modelo, dl, dispositivo) -> float:

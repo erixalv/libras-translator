@@ -1,10 +1,14 @@
 opencv-python==4.10.*
-mediapipe==0.10.14    # >=0.10.21 remove a API mp.solutions (Holistic) usada em extrator_mediapipe.py
+mediapipe>=0.10.14,<1.0.0    # extrator_mediapipe.py tenta mp.solutions.holistic e cai pra mediapipe.tasks se nao existir
+protobuf>=4.25.3,<5   # travado pelo mediapipe: com protobuf>=5.26 (que o streamlit>=1.39 traz) as DUAS APIs do
+                       # mediapipe (solutions.holistic E tasks.python.vision) quebram com
+                       # AttributeError/MessageFactory -- o fallback de API nao contorna isso, o protobuf tem
+                       # que ficar preso mesmo. Nao atualizar sem testar mediapipe + streamlit juntos de novo.
 numpy
 pandas
 scikit-learn
-torch                 
-streamlit
+torch
+streamlit==1.38.0     # ultima versao com protobuf<5 -- ver nota do protobuf acima
 streamlit-webrtc      # captura de vídeo ao vivo no navegador (Pessoa 5)
 matplotlib
 pytest

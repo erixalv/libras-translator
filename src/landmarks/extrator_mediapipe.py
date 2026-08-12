@@ -1,18 +1,20 @@
 """
-Extracao de landmarks com MediaPipe Holistic. Implementa o Contrato B.
+Extracao de landmarks com MediaPipe (Holistic ou Tasks API). Implementa o Contrato B.
 
     extrair_landmarks(frame)              -> dict (1 frame)
+    extrair_landmarks_anotado(frame)      -> (dict, frame com pose/maos desenhados) -- so p/ debug visual ao vivo
     construir_sequencia(lista_de_dicts)   -> np.ndarray (30, N_FEATURES)
 
-ATENCAO ESPELHAMENTO: o Holistic rotula left/right pela anatomia da pessoa,
+ATENCAO ESPELHAMENTO: o MediaPipe rotula left/right pela anatomia da pessoa,
 nao pelo lado da imagem. Mas se a Pessoa 5 aplicar cv2.flip() na webcam para
 o efeito "espelho" antes de chamar extrair_landmarks(), as maos trocam em
 relacao ao dataset e o modelo quebra. Combinar no kickoff: o flip so pode
 acontecer DEPOIS da extracao, na hora de desenhar o overlay.
 """
 
-from typing import Optional
-
+import os
+import urllib.request
+from typing import Optional, Tuple
 import numpy as np
 
 from .normalizacao import (
@@ -24,49 +26,162 @@ from .normalizacao import (
 )
 
 _holistic = None
+_tasks_pose = None
+_tasks_hand = None
+_modo_extracao = None  # "solutions" ou "tasks"
 
 
-def _obter_holistic():
-    """Instancia unica e preguicosa — o Holistic custa ~1s para carregar."""
-    global _holistic
-    if _holistic is None:
-        import mediapipe as mp
+def _garantir_modelos_tasks() -> Tuple[str, str]:
+    """Garante que os arquivos .task existam em data/processed/."""
+    raiz = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    dir_proc = os.path.join(raiz, "data", "processed")
+    os.makedirs(dir_proc, exist_ok=True)
 
-        _holistic = mp.solutions.holistic.Holistic(
-            static_image_mode=False,
-            model_complexity=1,        # 2 e mais preciso e bem mais lento
-            smooth_landmarks=True,
-            refine_face_landmarks=False,
-            min_detection_confidence=0.5,
+    pose_path = os.path.join(dir_proc, "pose_landmarker.task")
+    hand_path = os.path.join(dir_proc, "hand_landmarker.task")
+
+    if not os.path.exists(pose_path):
+        url = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task"
+        urllib.request.urlretrieve(url, pose_path)
+
+    if not os.path.exists(hand_path):
+        url = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task"
+        urllib.request.urlretrieve(url, hand_path)
+
+    return pose_path, hand_path
+
+
+def _obter_extrator():
+    """Retorna o modo de extracao ativo ('solutions' ou 'tasks')."""
+    global _holistic, _tasks_pose, _tasks_hand, _modo_extracao
+
+    if _modo_extracao is not None:
+        return _modo_extracao
+
+    import mediapipe as mp
+
+    # Tenta 1: mp.solutions.holistic (Legacy API)
+    solutions = getattr(mp, "solutions", None)
+    if solutions is not None and hasattr(solutions, "holistic"):
+        try:
+            _holistic = solutions.holistic.Holistic(
+                static_image_mode=False,
+                model_complexity=1,
+                smooth_landmarks=True,
+                refine_face_landmarks=False,
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5,
+            )
+            _modo_extracao = "solutions"
+            return _modo_extracao
+        except Exception:
+            _holistic = None
+
+    # Tenta 2: mp.tasks.python.vision (Tasks API)
+    try:
+        from mediapipe.tasks.python import vision, BaseOptions
+        pose_path, hand_path = _garantir_modelos_tasks()
+
+        opts_pose = vision.PoseLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path=pose_path),
+            min_pose_detection_confidence=0.5,
+            min_pose_presence_confidence=0.5,
             min_tracking_confidence=0.5,
         )
-    return _holistic
+        opts_hand = vision.HandLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path=hand_path),
+            num_hands=2,
+            min_hand_detection_confidence=0.5,
+            min_hand_presence_confidence=0.5,
+            min_tracking_confidence=0.5,
+        )
+        _tasks_pose = vision.PoseLandmarker.create_from_options(opts_pose)
+        _tasks_hand = vision.HandLandmarker.create_from_options(opts_hand)
+        _modo_extracao = "tasks"
+        return _modo_extracao
+    except Exception as e:
+        import logging
+        logging.warning(f"Erro ao carregar MediaPipe (solutions ou tasks): {e}")
+        return None
 
 
 def _reiniciar_holistic():
-    """
-    Descarta a instancia atual do Holistic.
-
-    smooth_landmarks=True mantem um filtro temporal com estado entre frames —
-    otimo dentro de UM video/sessao continua, mas contamina o inicio do
-    proximo video se a mesma instancia for reaproveitada (suaviza os
-    primeiros frames em direcao ao ultimo estado do video anterior). Chamar
-    isso entre arquivos de video distintos.
-    """
-    global _holistic
+    global _holistic, _tasks_pose, _tasks_hand, _modo_extracao
     if _holistic is not None:
-        _holistic.close()
+        try:
+            _holistic.close()
+        except Exception:
+            pass
         _holistic = None
+    if _tasks_pose is not None:
+        try:
+            _tasks_pose.close()
+        except Exception:
+            pass
+        _tasks_pose = None
+    if _tasks_hand is not None:
+        try:
+            _tasks_hand.close()
+        except Exception:
+            pass
+        _tasks_hand = None
+    _modo_extracao = None
 
 
-def _pose_para_lista(lm) -> list:
-    return [[p.x, p.y, p.z, p.visibility] for p in lm.landmark]
+def _detectar_bruto(frame: np.ndarray) -> Optional[dict]:
+    """
+    Roda o Holistic/Tasks 1 vez e devolve pose/maos em coordenadas de imagem
+    (fracao 0..1 da largura/altura do frame, ainda SEM a normalizacao pelo
+    centro dos ombros). Usado tanto por extrair_landmarks() (Contrato B)
+    quanto por extrair_landmarks_anotado() (desenha os pontos no frame) --
+    assim os dois reaproveitam a MESMA inferencia, sem rodar o MediaPipe
+    2x por frame.
+    """
+    import cv2
+    import mediapipe as mp
 
-
-def _mao_para_lista(lm) -> Optional[list]:
-    if lm is None:
+    modo = _obter_extrator()
+    if modo is None:
         return None
-    return [[p.x, p.y, p.z] for p in lm.landmark]
+
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+    if modo == "solutions":
+        res = _holistic.process(frame_rgb)
+        if res.pose_landmarks is None:
+            return None
+        return {
+            "pose": [[p.x, p.y, p.z, p.visibility] for p in res.pose_landmarks.landmark],
+            "left_hand": [[p.x, p.y, p.z] for p in res.left_hand_landmarks.landmark] if res.left_hand_landmarks else None,
+            "right_hand": [[p.x, p.y, p.z] for p in res.right_hand_landmarks.landmark] if res.right_hand_landmarks else None,
+        }
+
+    elif modo == "tasks":
+        mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+        pose_res = _tasks_pose.detect(mp_img)
+        hand_res = _tasks_hand.detect(mp_img)
+
+        if not pose_res.pose_landmarks or len(pose_res.pose_landmarks) == 0:
+            return None
+
+        pose_lms = pose_res.pose_landmarks[0]
+        pose_list = [[p.x, p.y, p.z, getattr(p, "visibility", 1.0)] for p in pose_lms]
+
+        left_hand_list = None
+        right_hand_list = None
+
+        if hand_res.hand_landmarks and hand_res.handedness:
+            for hand_lms, handedness in zip(hand_res.hand_landmarks, hand_res.handedness):
+                label = handedness[0].category_name  # "Left" ou "Right"
+                lms = [[p.x, p.y, p.z] for p in hand_lms]
+                if label == "Left":
+                    left_hand_list = lms
+                elif label == "Right":
+                    right_hand_list = lms
+
+        return {"pose": pose_list, "left_hand": left_hand_list, "right_hand": right_hand_list}
+
+    return None
 
 
 def extrair_landmarks(
@@ -75,24 +190,72 @@ def extrair_landmarks(
     """
     Recebe 1 frame (480, 640, 3) BGR uint8 (Contrato A).
     Devolve 1 dict no formato do Contrato B, ja normalizado pelo centro dos
-    ombros. Devolve None se nenhuma pose for detectada (sem pose nao ha
-    referencia de normalizacao — o frame e descartado).
+    ombros. Devolve None se nenhuma pose for detectada.
+    """
+    bruto = _detectar_bruto(frame)
+    if bruto is None:
+        return None
+    bruto["frame_id"] = int(frame_id)
+    bruto["timestamp_ms"] = int(timestamp_ms)
+    return normalizar_registro(bruto)
+
+
+def extrair_landmarks_anotado(
+    frame: np.ndarray, frame_id: int = 0, timestamp_ms: int = 0
+) -> Tuple[Optional[dict], np.ndarray]:
+    """
+    Igual extrair_landmarks(), mas tambem devolve uma copia do frame com os
+    pontos de pose/maos desenhados por cima -- so pra visualizacao ao vivo
+    (debug de "esta pegando minha mao?"), nao faz parte do Contrato B e nao
+    e usado no pipeline de treino/dataset.
+    """
+    bruto = _detectar_bruto(frame)
+    if bruto is None:
+        return None, frame
+
+    frame_anotado = _desenhar_landmarks(frame, bruto["pose"], bruto["left_hand"], bruto["right_hand"])
+
+    bruto["frame_id"] = int(frame_id)
+    bruto["timestamp_ms"] = int(timestamp_ms)
+    return normalizar_registro(bruto), frame_anotado
+
+
+def _desenhar_landmarks(
+    frame: np.ndarray,
+    pose: Optional[list],
+    mao_esq: Optional[list],
+    mao_dir: Optional[list],
+) -> np.ndarray:
+    """
+    Desenha pose (ciano) e maos (mao esquerda verde, mao direita vermelha)
+    num frame BGR, usando as coordenadas de imagem 0..1 devolvidas por
+    _detectar_bruto(). As conexoes (POSE_CONNECTIONS/HAND_CONNECTIONS) sao
+    so a topologia dos pontos -- vale tanto pro backend "solutions" quanto
+    "tasks", que usam a mesma numeracao de landmarks.
     """
     import cv2
+    import mediapipe as mp
 
-    resultado = _obter_holistic().process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    frame_anotado = frame.copy()
+    h, w = frame_anotado.shape[:2]
 
-    if resultado.pose_landmarks is None:
-        return None
+    def px(ponto):
+        return int(ponto[0] * w), int(ponto[1] * h)
 
-    bruto = {
-        "frame_id": int(frame_id),
-        "timestamp_ms": int(timestamp_ms),
-        "pose": _pose_para_lista(resultado.pose_landmarks),
-        "left_hand": _mao_para_lista(resultado.left_hand_landmarks),
-        "right_hand": _mao_para_lista(resultado.right_hand_landmarks),
-    }
-    return normalizar_registro(bruto)
+    def desenhar(pontos, conexoes, cor):
+        if not pontos:
+            return
+        for a, b in conexoes:
+            if a < len(pontos) and b < len(pontos):
+                cv2.line(frame_anotado, px(pontos[a]), px(pontos[b]), cor, 1, cv2.LINE_AA)
+        for p in pontos:
+            cv2.circle(frame_anotado, px(p), 3, cor, -1, cv2.LINE_AA)
+
+    desenhar(pose, mp.solutions.pose.POSE_CONNECTIONS, (255, 200, 0))
+    desenhar(mao_esq, mp.solutions.hands.HAND_CONNECTIONS, (0, 220, 0))
+    desenhar(mao_dir, mp.solutions.hands.HAND_CONNECTIONS, (0, 0, 255))
+
+    return frame_anotado
 
 
 def construir_sequencia(
@@ -103,8 +266,7 @@ def construir_sequencia(
     """
     Lista de dicts (Contrato B) -> array (n_frames, N_FEATURES) float32.
 
-    modo="reamostrar": comprime a sequencia inteira em n_frames. Use para
-        sinais isolados (um video = um sinal) — treinamento.
+    modo="reamostrar": comprime a sequencia inteira em n_frames.
     modo="ultima_janela": pega os ultimos n_frames. Use no fluxo ao vivo.
     """
     if not landmarks_por_frame:
@@ -120,20 +282,14 @@ def construir_sequencia(
     raise ValueError(f"modo desconhecido: {modo}")
 
 
-# --------------------------------------------------------------------------
-# Utilitarios de dataset (nao fazem parte do contrato)
-# --------------------------------------------------------------------------
-
 def extrair_video(caminho: str, passo: int = 1) -> tuple[list[dict], dict]:
     """
     Extrai landmarks de um arquivo de video inteiro.
     Devolve (lista de registros do Contrato B, estatisticas de deteccao).
-
-    passo > 1 subamostra frames — util para videos a 60 fps.
     """
     import cv2
 
-    _reiniciar_holistic()  # cada video e uma sessao de suavizacao nova
+    _reiniciar_holistic()
 
     cap = cv2.VideoCapture(caminho)
     if not cap.isOpened():
@@ -162,6 +318,6 @@ def extrair_video(caminho: str, passo: int = 1) -> tuple[list[dict], dict]:
     stats = {
         "frames_lidos": total,
         "taxa_pose": com_pose / total if total else 0.0,
-        "taxa_mao": com_mao / total if total else 0.0,   # criterio de aceite: > 0.90
+        "taxa_mao": com_mao / total if total else 0.0,
     }
     return registros, stats
